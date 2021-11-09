@@ -42,6 +42,11 @@ def setup_platform(
         entities.append(
             AdemcoZone(panel.getZone(x["id"]), x, "motion")
         )
+    for x in config.get("problems"):
+        log.debug("ADEMCO" + str(x))
+        entities.append(
+            AdemcoZone(panel.getZone(x["id"]), x, "problem")
+        )
 
     async_add_entities(entities)
     return True
@@ -81,6 +86,7 @@ class AdemcoZone(BinarySensorEntity):
             "window": " Window",
             "garage_door": " Garage Door",
             "motion": " Motion",
+            "problem": " Problem",
         }
         return map.get(self.deviceClass, "")
     

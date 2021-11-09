@@ -44,6 +44,7 @@ CONFIG_SCHEMA = CONFIG_SCHEMA.extend(
             vol.Optional("motions"): vol.All(cv.ensure_list, [ZONE_CONFIG]),
             vol.Optional("doors"): vol.All(cv.ensure_list, [ZONE_CONFIG]),
             vol.Optional("windows"): vol.All(cv.ensure_list, [ZONE_CONFIG]),
+            vol.Optional("problems"): vol.All(cv.ensure_list, [ZONE_CONFIG]),
             vol.Optional("garagedoors"): vol.All(cv.ensure_list, [GARAGE_CONFIG]),
         }
     }
