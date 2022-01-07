@@ -3,7 +3,6 @@ from homeassistant.components.binary_sensor import BinarySensorEntity
 from .ademco import Zone, Output
 import logging
 import asyncio
-import datetime
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
@@ -35,19 +34,19 @@ def setup_platform(
 
     for x in config.get("windows"):
         log.debug("ADEMCO" + str(x))
-        entities.append(AdemcoZone(panel.getZone(x["id"]), x, "window"))
+        entities.append(
+            AdemcoZone(panel.getZone(x["id"]), x, "window")
+        )
     for x in config.get("motions"):
         log.debug("ADEMCO" + str(x))
-<<<<<<< HEAD
-        entities.append(AdemcoZone(panel.getZone(x["id"]), x, "motion"))
-    for x in config.get("problems"):
-        log.debug("ADEMCO" + str(x))
-        entities.append(AdemcoZone(panel.getZone(x["id"]), x, "problem"))
-=======
         entities.append(
             AdemcoZone(panel.getZone(x["id"]), x, "motion")
         )
->>>>>>> parent of 0c8fd81 (Add problem device type)
+    for x in config.get("problems"):
+        log.debug("ADEMCO" + str(x))
+        entities.append(
+            AdemcoZone(panel.getZone(x["id"]), x, "problem")
+        )
 
     async_add_entities(entities)
     return True
@@ -61,9 +60,8 @@ class AdemcoZone(BinarySensorEntity):
         self._zone = zone
         self._config = config
         self.deviceClass = deviceClass
-        self._zone.registerCallback(self.cb)
-        self.lastTripped = None
-        self.futureUpdate = None
+        self._zone.registerCallback(self.schedule_update_ha_state)
+
         if self.deviceClass == "garage_door":
             if not output:
                 raise Exception("Output is required for garage door")
@@ -77,9 +75,10 @@ class AdemcoZone(BinarySensorEntity):
     def identifiers(self):
         return (DOMAIN, self.unique_id)
 
+
     @property
     def unique_id(self):
-        return "{}.zone{}".format(DOMAIN, self._zone.zoneNum)
+        return "{}.zone{}".format(DOMAIN,self._zone.zoneNum)
 
     def nameSuffix(self) -> str:
         map = {
@@ -87,16 +86,16 @@ class AdemcoZone(BinarySensorEntity):
             "window": " Window",
             "garage_door": " Garage Door",
             "motion": " Motion",
+            "problem": " Problem",
         }
         return map.get(self.deviceClass, "")
-
+    
     @property
     def extra_state_attributes(self):
         return {
-            "bypassed": self._zone.bypassed,
-            "alarm": self._zone.alarm,
-            "trouble": self._zone.trouble,
-        }
+                "bypassed":self._zone.bypassed, 
+                "alarm":self._zone.alarm, 
+                "trouble":self._zone.trouble }
 
     @property
     def name(self):
@@ -110,19 +109,3 @@ class AdemcoZone(BinarySensorEntity):
     def device_class(self):
         """Return the device class."""
         return self.deviceClass
-
-    async def async_minTime(self, hass, minTime):
-        await asyncio.sleep(minTime)
-        self.schedule_update_ha_state()
-
-    def cb(self):
-        if self.deviceClass == "motion":
-            if self._zone.opened:
-                self.lastTripped = datetime.datetime.now()
-                if self.futureUpdate:
-                    self.futureUpdate.cancel()
-                self.futureUpdate = asyncio.run_coroutine_threadsafe(
-                    self.async_minTime(self.hass, 30), self.hass.loop
-                )
-        else:
-            self.async_update_ha_state()
