@@ -11,7 +11,6 @@ from .const import DOMAIN
 from homeassistant.helpers.typing import (
     ConfigType,
     DiscoveryInfoType,
-    HomeAssistantType,
 )
 from typing import Callable, Optional, Sequence
 
@@ -19,7 +18,7 @@ log.debug("ademco LOADING BINARY SENSOR")
 
 
 def setup_platform(
-    hass: HomeAssistantType,
+    hass: HomeAssistant,
     config: ConfigType,
     async_add_entities: Callable[[Sequence[BinarySensorEntity], bool], None],
     discovery_info: Optional[DiscoveryInfoType] = None,
