@@ -41,3 +41,4 @@ python3 ./scripts/compare_registry.py \
 
 - The integration currently targets local serial communication.
 - If you are testing a feature branch in HACS, HACS will use the repository default branch or published versions. Merge or release branch changes before expecting normal HACS installs to pick them up.
+- Remaining migration and cleanup tasks are tracked in [TODO.md](TODO.md).
