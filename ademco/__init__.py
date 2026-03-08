@@ -1,26 +1,12 @@
 from asyncio.streams import StreamReader, StreamWriter
-from asyncio.transports import Transport
 from typing import Callable, Dict, List
 import asyncio
-import serial_asyncio
-from serial import SerialException
 from asyncio import CancelledError
 import logging
-import sys
-import datetime
-import traceback
 
 log = logging.getLogger(__name__)
 
 REFRESH_INTERVAL = 3600
-
-
-class AdemcoError(Exception):
-    def __init__(self, panelClass: "AlarmPanel"):
-        # TODO LOG trace and status of module
-        # traceback.print_exception(*exc_info)
-        log.critical("AdemcoError - Restarting")
-        panelClass.loop.create_task(panelClass.restart())
 
 
 def twos_comp(val, bits):
@@ -40,7 +26,8 @@ def checksum(s: str) -> str:
 
 
 class AlarmPanel:
-    def __init__(self, config: dict, loop=asyncio.get_event_loop()) -> None:
+    def __init__(self, config: dict, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        self.loop = loop or asyncio.get_running_loop()
         self.SERIAL_PORT = config.get("device", "/dev/ttyUSB0")
         self.BAUD_RATE = config.get("baud", "1200")
 
@@ -55,7 +42,6 @@ class AlarmPanel:
 
         self._partitions: Dict[int, Partition] = {}
         self._partitionReport = None
-        self.loop = loop
         self.reader: StreamReader = None
         self.writer: StreamWriter = None
         self.writeQueue = asyncio.Queue()
@@ -66,6 +52,8 @@ class AlarmPanel:
         self._listen_task: asyncio.Task | None = None
         self._refresh_task: asyncio.Task | None = None
         self._write_task: asyncio.Task | None = None
+        self._restart_task: asyncio.Task | None = None
+        self._connect_lock = asyncio.Lock()
         self._stopped = False
 
         log.debug("Initializing Ademco panel")
@@ -118,6 +106,7 @@ class AlarmPanel:
             self._listen_task,
             self._refresh_task,
             self._write_task,
+            self._restart_task,
         ]
         pending = []
         for task in tasks:
@@ -135,8 +124,16 @@ class AlarmPanel:
         self._listen_task = None
         self._refresh_task = None
         self._write_task = None
+        self._restart_task = None
         self._set_connected(False)
         self._set_initialized(False)
+
+    def request_restart(self) -> None:
+        """Queue a restart from an exception path without duplicating tasks."""
+        if self._stopped:
+            return
+        if self._restart_task is None or self._restart_task.done():
+            self._restart_task = self.loop.create_task(self.restart())
 
     async def restart(self):
         # reset everything on errrors
@@ -144,6 +141,15 @@ class AlarmPanel:
         await self.async_stop()
         if should_restart:
             await self.async_start()
+
+    async def _open_serial_connection(self) -> tuple[StreamReader, StreamWriter]:
+        """Open the Ademco serial transport lazily to avoid import-time overhead."""
+        import serial_asyncio
+
+        return await serial_asyncio.open_serial_connection(
+            url=self.SERIAL_PORT,
+            baudrate=self.BAUD_RATE,
+        )
 
     async def main(self):
         self._write_task = self.loop.create_task(self.monitorWriteQueue())
@@ -161,19 +167,26 @@ class AlarmPanel:
                         self.SERIAL_PORT, self.BAUD_RATE
                     )
                 )
+                if self.reader or self.writer or self._stopped:
+                    await asyncio.sleep(1)
+                    continue
                 try:
-                    (
-                        self.reader,
-                        self.writer,
-                    ) = await serial_asyncio.open_serial_connection(
-                        url=self.SERIAL_PORT, baudrate=self.BAUD_RATE
-                    )
-                    self.writer.write(b"\r\n")
-                except (SerialException, OSError, FileNotFoundError):
+                    async with self._connect_lock:
+                        if self.reader or self.writer or self._stopped:
+                            continue
+
+                        (
+                            self.reader,
+                            self.writer,
+                        ) = await self._open_serial_connection()
+                        self.writer.write(b"\r\n")
+                except Exception:
                     self._handle_disconnect()
                     log.exception("Caught Serial Exception")
                     await asyncio.sleep(5)
                     continue
+                except CancelledError:
+                    break
 
                 log.debug("Ademco Connected")
                 self._set_connected(True)
@@ -219,7 +232,8 @@ class AlarmPanel:
                 except Exception:
                     self._handle_disconnect()
                     log.exception("Listen function threw exception")
-                    await asyncio.sleep(2)
+                    self.request_restart()
+                    break
             else:
                 await asyncio.sleep(1)
 
@@ -238,8 +252,11 @@ class AlarmPanel:
                     await asyncio.sleep(1)
                 except CancelledError:
                     break
-                except:
+                except Exception:
                     log.exception("Unexpected error in monitorWriteQueue:")
+                    self._handle_disconnect()
+                    self.request_restart()
+                    break
             else:
                 await asyncio.sleep(2)
 

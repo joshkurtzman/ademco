@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
@@ -10,9 +12,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import AdemcoConfigEntry
-from .ademco import Zone
 from .const import CONF_DOORS, CONF_MOTIONS, CONF_PROBLEMS, CONF_WINDOWS
 from .entity import AdemcoEntity
+
+if TYPE_CHECKING:
+    from .ademco import Zone
 
 
 async def async_setup_entry(

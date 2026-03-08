@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from homeassistant.components.http import CONFIG_SCHEMA
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ID, CONF_NAME
 from homeassistant.core import HomeAssistant
@@ -22,11 +22,13 @@ from .const import (
     DOMAIN,
     PLATFORMS,
 )
-from .ademco import AlarmPanel
 
 import logging
 
 log = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from .ademco import AlarmPanel
 
 
 ZONE_CONFIG = vol.Schema(
@@ -43,7 +45,7 @@ OUTPUT_CONFIG = vol.Schema(
         vol.Required("output"): cv.string,
     }
 )
-CONFIG_SCHEMA = CONFIG_SCHEMA.extend(
+CONFIG_SCHEMA = vol.Schema(
     {
         vol.Required(DOMAIN): {
             vol.Optional(CONF_DEVICE): cv.string,
@@ -54,7 +56,8 @@ CONFIG_SCHEMA = CONFIG_SCHEMA.extend(
             vol.Optional(CONF_PROBLEMS): vol.All(cv.ensure_list, [ZONE_CONFIG]),
             vol.Optional(CONF_GARAGE_DOORS): vol.All(cv.ensure_list, [OUTPUT_CONFIG]),
         }
-    }
+    },
+    extra=vol.ALLOW_EXTRA,
 )
 
 
@@ -62,7 +65,7 @@ CONFIG_SCHEMA = CONFIG_SCHEMA.extend(
 class AdemcoRuntimeData:
     """Runtime data stored on the config entry."""
 
-    panel: AlarmPanel
+    panel: "AlarmPanel"
     config: dict
     device_id: str
     device_name: str
@@ -86,6 +89,8 @@ async def async_setup(hass: HomeAssistant, config) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: AdemcoConfigEntry) -> bool:
     """Set up Ademco from a config entry."""
+    from .ademco import AlarmPanel
+
     config = dict(entry.data)
     panel = AlarmPanel(config, loop=hass.loop)
     await panel.async_start()

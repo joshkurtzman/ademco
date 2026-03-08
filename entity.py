@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 
-from .ademco import AlarmPanel
 from .const import DOMAIN, MANUFACTURER, MODEL
+
+if TYPE_CHECKING:
+    from .ademco import AlarmPanel
 
 
 class AdemcoEntity(Entity):

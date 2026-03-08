@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 from homeassistant.components.cover import (
     CoverDeviceClass,
@@ -15,11 +16,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import AdemcoConfigEntry
-from .ademco import Output, Zone
 from .const import CONF_GARAGE_DOORS
 from .entity import AdemcoEntity
 
 log = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from .ademco import Output, Zone
 
 
 async def async_setup_entry(
