@@ -3,6 +3,7 @@
   "name": "Ademco RS232 Alarm Panel",
   "config_flow": true,
   "documentation": "https://www.home-assistant.io/integrations/ademco",
+  "issue_tracker": "https://github.com/joshkurtzman/ademco/issues",
   "requirements": ["pyserial-asyncio-fast"],
   "codeowners": [
     "@joshkurtzman"
