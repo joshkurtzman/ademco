@@ -2,15 +2,14 @@
 
 ## Migration
 
-- Move the integration fully off `configuration.yaml` and make the config entry the only source of truth.
-- Add a clean migration path for users who still have an `ademco:` block in `configuration.yaml`.
 - Verify entity and device registry migration stays stable for existing installs during upgrades.
+- Decide whether to keep or remove the boot warning for users who still have an `ademco:` block in `configuration.yaml`.
 
 ## Config Flow
 
 - Replace the JSON text fields in `config_flow.py` with a friendlier Home Assistant UI flow.
 - Add validation that catches malformed zone and garage door definitions before entry creation.
-- Consider options flow support for editing zone mappings after initial setup.
+- Consider options flow support if reconfigure is not enough for future editing needs.
 
 ## Runtime and Lifecycle
 

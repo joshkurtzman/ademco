@@ -1,14 +1,25 @@
 {
   "config": {
     "abort": {
-      "already_configured": "Device is already configured",
-      "invalid_config": "The imported configuration is invalid"
+      "already_configured": "Device is already configured"
     },
     "error": {
       "invalid_config": "The configuration data is invalid",
       "invalid_json": "Zone lists must be valid JSON arrays"
     },
     "step": {
+      "reconfigure": {
+        "title": "Reconfigure Ademco panel",
+        "data": {
+          "device": "Device",
+          "baud": "Baud Rate",
+          "doors": "Doors JSON",
+          "windows": "Windows JSON",
+          "motions": "Motions JSON",
+          "problems": "Problems JSON",
+          "garagedoors": "Garage doors JSON"
+        }
+      },
       "user": {
         "data": {
           "device": "Device",

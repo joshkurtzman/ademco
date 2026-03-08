@@ -37,15 +37,14 @@ type AdemcoConfigEntry = ConfigEntry[AdemcoRuntimeData]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Set up the integration and import YAML if present."""
-    if DOMAIN not in config:
-        return True
-
-    await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": "import"},
-        data=config[DOMAIN],
-    )
+    """Set up the integration."""
+    if DOMAIN in config:
+        log.warning(
+            "The '%s:' YAML configuration block is no longer used. "
+            "Manage Ademco from Settings -> Devices & services and remove the "
+            "YAML block from configuration.yaml.",
+            DOMAIN,
+        )
     return True
 
 

@@ -12,6 +12,14 @@ This repository is structured for HACS custom repository installation.
 4. Restart Home Assistant.
 5. Add the integration from `Settings -> Devices & services`.
 
+## Configuration
+
+This integration is configured from the Home Assistant UI only.
+
+- Add it from `Settings -> Devices & services`.
+- Reconfigure it later from the integration card.
+- Remove any legacy `ademco:` block from `configuration.yaml`.
+
 ## Development Layout
 
 This repo uses HACS `content_in_root`, so the integration files live at the repository root instead of under `custom_components/ademco/`.

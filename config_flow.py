@@ -95,6 +95,44 @@ def _normalize_entry_data(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _stringify_form_value(value: Any) -> str:
+    """Convert stored config data into a stable JSON string for forms."""
+    if not value:
+        return "[]"
+    return json.dumps(value, separators=(", ", ": "))
+
+
+def _build_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+    """Build the config form schema."""
+    defaults = defaults or {}
+    return vol.Schema(
+        {
+            vol.Optional(CONF_DEVICE, default=defaults.get(CONF_DEVICE, "")): str,
+            vol.Required(CONF_BAUD, default=defaults.get(CONF_BAUD, "1200")): str,
+            vol.Optional(
+                CONF_DOORS,
+                default=_stringify_form_value(defaults.get(CONF_DOORS)),
+            ): str,
+            vol.Optional(
+                CONF_WINDOWS,
+                default=_stringify_form_value(defaults.get(CONF_WINDOWS)),
+            ): str,
+            vol.Optional(
+                CONF_MOTIONS,
+                default=_stringify_form_value(defaults.get(CONF_MOTIONS)),
+            ): str,
+            vol.Optional(
+                CONF_PROBLEMS,
+                default=_stringify_form_value(defaults.get(CONF_PROBLEMS)),
+            ): str,
+            vol.Optional(
+                CONF_GARAGE_DOORS,
+                default=_stringify_form_value(defaults.get(CONF_GARAGE_DOORS)),
+            ): str,
+        }
+    )
+
+
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Ademco."""
 
@@ -104,11 +142,27 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle a user-initiated flow."""
-        if self._async_current_entries():
+        return await self._async_handle_config_step(user_input)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle a reconfiguration flow."""
+        return await self._async_handle_config_step(
+            user_input,
+            self._get_reconfigure_entry().data,
+        )
+
+    async def _async_handle_config_step(
+        self,
+        user_input: dict[str, Any] | None = None,
+        defaults: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Handle create and reconfigure flows."""
+        if self.source != config_entries.SOURCE_RECONFIGURE and self._async_current_entries():
             return self.async_abort(reason="already_configured")
 
         errors: dict[str, str] = {}
-
         if user_input is not None:
             try:
                 data = {
@@ -128,39 +182,21 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except ValueError:
                 errors["base"] = "invalid_config"
             else:
+                normalized = _normalize_entry_data(data)
+                if self.source == config_entries.SOURCE_RECONFIGURE:
+                    return self.async_update_reload_and_abort(
+                        self._get_reconfigure_entry(),
+                        title=_default_title(normalized),
+                        data=normalized,
+                    )
                 return self.async_create_entry(
-                    title=_default_title(data),
-                    data=_normalize_entry_data(data),
+                    title=_default_title(normalized),
+                    data=normalized,
                 )
 
-        schema = vol.Schema(
-            {
-                vol.Optional(CONF_DEVICE, default=""): str,
-                vol.Required(CONF_BAUD, default="1200"): str,
-                vol.Optional(CONF_DOORS, default="[]"): str,
-                vol.Optional(CONF_WINDOWS, default="[]"): str,
-                vol.Optional(CONF_MOTIONS, default="[]"): str,
-                vol.Optional(CONF_PROBLEMS, default="[]"): str,
-                vol.Optional(CONF_GARAGE_DOORS, default="[]"): str,
-            }
+        step_id = "reconfigure" if self.source == config_entries.SOURCE_RECONFIGURE else "user"
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=_build_schema(defaults),
+            errors=errors,
         )
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
-
-    async def async_step_import(
-        self, import_config: dict[str, Any]
-    ) -> ConfigFlowResult:
-        """Import configuration from YAML."""
-        try:
-            data = _normalize_entry_data(import_config)
-        except ValueError:
-            return self.async_abort(reason="invalid_config")
-
-        if existing_entries := self._async_current_entries():
-            self.hass.config_entries.async_update_entry(
-                existing_entries[0],
-                data=data,
-                title=_default_title(data),
-            )
-            return self.async_abort(reason="already_configured")
-
-        return self.async_create_entry(title=_default_title(data), data=data)
