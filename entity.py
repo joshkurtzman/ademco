@@ -12,7 +12,7 @@ from .const import DOMAIN, MANUFACTURER, MODEL
 class AdemcoEntity(Entity):
     """Base entity for Ademco entities attached to a panel device."""
 
-    _attr_has_entity_name = True
+    _attr_has_entity_name = False
     _attr_should_poll = False
 
     def __init__(self, panel: AlarmPanel, device_id: str, device_name: str) -> None:

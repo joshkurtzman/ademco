@@ -70,9 +70,7 @@ class AdemcoGarageDoor(AdemcoEntity, CoverEntity):
         self._output = output
         self._config = config
         self._status = CoverState.OPEN if zone.opened else CoverState.CLOSED
-        self._attr_unique_id = (
-            f"garage_output_{self._output.outputId}_zone_{self._zone.zoneNum}"
-        )
+        self._attr_unique_id = f"ademco.zone{self._zone.zoneNum}"
         self._remove_zone_callback = None
 
     async def async_added_to_hass(self) -> None:
@@ -98,8 +96,11 @@ class AdemcoGarageDoor(AdemcoEntity, CoverEntity):
 
     @property
     def name(self):
-        """Return the entity name relative to the panel device."""
-        return self._config.get("name")
+        """Return the legacy-compatible garage door name."""
+        door_name = self._config.get("name", "").strip()
+        if not door_name:
+            return f"Zone {self._zone.zoneNum} Garage Door"
+        return f"{door_name} Garage Door"
 
     @property
     def current_cover_position(self):

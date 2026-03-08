@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from homeassistant.components.binary_sensor import BinarySensorEntity
+from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
+    BinarySensorEntity,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -90,8 +93,9 @@ class AdemcoZone(AdemcoEntity, BinarySensorEntity):
         super().__init__(panel, device_id, device_name)
         self._zone = zone
         self._config = config
-        self._attr_device_class = device_class
-        self._attr_unique_id = f"zone_{self._zone.zoneNum}"
+        self._zone_type = device_class
+        self._attr_device_class = BinarySensorDeviceClass(device_class)
+        self._attr_unique_id = f"ademco.zone{self._zone.zoneNum}"
         self._remove_zone_callback = None
 
     async def async_added_to_hass(self) -> None:
@@ -119,8 +123,17 @@ class AdemcoZone(AdemcoEntity, BinarySensorEntity):
 
     @property
     def name(self):
-        """Return the entity name relative to the panel device."""
-        return self._config.get("name")
+        """Return the legacy-compatible zone name."""
+        suffix = {
+            "door": "Door",
+            "window": "Window",
+            "motion": "Motion",
+            "problem": "Problem",
+        }[self._zone_type]
+        zone_name = self._config.get("name", "").strip()
+        if not zone_name:
+            return f"Zone {self._zone.zoneNum} {suffix}"
+        return f"{zone_name} {suffix}"
 
     @property
     def is_on(self) -> bool:

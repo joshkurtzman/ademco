@@ -9,7 +9,7 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.config_entries import ConfigFlowResult
 
 from .const import (
     CONF_BAUD,
@@ -26,7 +26,7 @@ from .const import (
 
 def _default_title(data: dict[str, Any]) -> str:
     """Build a friendly entry title."""
-    return data.get(CONF_DEVICE) or DEFAULT_NAME
+    return DEFAULT_NAME
 
 
 def _normalize_zone_list(value: Any) -> list[dict[str, str]]:
@@ -102,7 +102,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle a user-initiated flow."""
         if self._async_current_entries():
             return self.async_abort(reason="already_configured")
@@ -146,7 +146,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
-    async def async_step_import(self, import_config: dict[str, Any]) -> FlowResult:
+    async def async_step_import(
+        self, import_config: dict[str, Any]
+    ) -> ConfigFlowResult:
         """Import configuration from YAML."""
         try:
             data = _normalize_entry_data(import_config)
