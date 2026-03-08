@@ -16,6 +16,27 @@ This repository is structured for HACS custom repository installation.
 
 This repo uses HACS `content_in_root`, so the integration files live at the repository root instead of under `custom_components/ademco/`.
 
+## Local Container Test
+
+If you want to test this branch on a laptop with Docker without touching your live Home Assistant instance:
+
+1. Check out this repository on your laptop.
+2. Run `./scripts/run_local_ha_container.sh`.
+3. Open `http://localhost:8129`.
+4. Inspect the generated config under `.tmp/ha-test/config`.
+
+The script copies the current branch into a temporary Home Assistant config as `custom_components/ademco` and starts a disposable Home Assistant container.
+
+To compare registry changes before and after a migration:
+
+```bash
+python3 ./scripts/compare_registry.py \
+  before/core.entity_registry \
+  after/core.entity_registry \
+  --before-device-registry before/core.device_registry \
+  --after-device-registry after/core.device_registry
+```
+
 ## Notes
 
 - The integration currently targets local serial communication.
