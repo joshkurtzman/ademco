@@ -70,7 +70,9 @@ class AdemcoGarageDoor(AdemcoEntity, CoverEntity):
         self._output = output
         self._config = config
         self._status = CoverState.OPEN if zone.opened else CoverState.CLOSED
-        self._attr_unique_id = f"garage_door_{self._zone.zoneNum}"
+        self._attr_unique_id = (
+            f"garage_output_{self._output.outputId}_zone_{self._zone.zoneNum}"
+        )
         self._remove_zone_callback = None
 
     async def async_added_to_hass(self) -> None:

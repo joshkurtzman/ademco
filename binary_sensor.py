@@ -91,7 +91,7 @@ class AdemcoZone(AdemcoEntity, BinarySensorEntity):
         self._zone = zone
         self._config = config
         self._attr_device_class = device_class
-        self._attr_unique_id = f"zone_{self._zone.zoneNum}_{device_class}"
+        self._attr_unique_id = f"zone_{self._zone.zoneNum}"
         self._remove_zone_callback = None
 
     async def async_added_to_hass(self) -> None:
