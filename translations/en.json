@@ -1,25 +1,26 @@
 {
     "config": {
         "abort": {
-            "already_configured": "Device is already configured"
+            "already_configured": "Device is already configured",
+            "invalid_config": "The imported configuration is invalid"
         },
         "error": {
             "cannot_connect": "Failed to connect",
+            "invalid_config": "The configuration data is invalid",
+            "invalid_json": "Zone lists must be valid JSON arrays",
             "invalid_auth": "Invalid authentication",
             "unknown": "Unexpected error"
         },
         "step": {
-            "panel": {
+            "user": {
                 "data": {
                     "device": "Device",
-                    "baud": "Baud Rate"
-                }
-            },
-            "zone": {
-                "data": {
-                    "id": "Zone ID",
-                    "type": "Zone Type",
-                    "name": "Zone Name"
+                    "baud": "Baud Rate",
+                    "doors": "Doors JSON",
+                    "windows": "Windows JSON",
+                    "motions": "Motions JSON",
+                    "problems": "Problems JSON",
+                    "garagedoors": "Garage doors JSON"
                 }
             }
         }

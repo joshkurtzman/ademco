@@ -1,6 +1,6 @@
 from asyncio.streams import StreamReader, StreamWriter
 from asyncio.transports import Transport
-from typing import Dict, List
+from typing import Callable, Dict, List
 import asyncio
 import serial_asyncio
 from serial import SerialException
@@ -60,24 +60,96 @@ class AlarmPanel:
         self.writer: StreamWriter = None
         self.writeQueue = asyncio.Queue()
         self.is_initialized = False
+        self.connected = False
+        self._callbacks: list[Callable[[], None]] = []
+        self._main_task: asyncio.Task | None = None
+        self._listen_task: asyncio.Task | None = None
+        self._refresh_task: asyncio.Task | None = None
+        self._write_task: asyncio.Task | None = None
+        self._stopped = False
 
         log.debug("Initializing Ademco panel")
-        loop.create_task(self.main())
+
+    @property
+    def available(self) -> bool:
+        return self.connected and self.is_initialized
+
+    def registerCallback(self, cb):
+        self._callbacks.append(cb)
+
+        def _remove_callback() -> None:
+            if cb in self._callbacks:
+                self._callbacks.remove(cb)
+
+        return _remove_callback
+
+    def _notify_callbacks(self) -> None:
+        for cb in list(self._callbacks):
+            cb()
+
+    def _set_connected(self, connected: bool) -> None:
+        if self.connected != connected:
+            self.connected = connected
+            self._notify_callbacks()
+
+    def _set_initialized(self, initialized: bool) -> None:
+        if self.is_initialized != initialized:
+            self.is_initialized = initialized
+            self._notify_callbacks()
+
+    def _handle_disconnect(self) -> None:
+        self.reader = None
+        if self.writer is not None:
+            self.writer.close()
+        self.writer = None
+        self._set_connected(False)
+        self._set_initialized(False)
+
+    async def async_start(self) -> None:
+        if self._main_task is None or self._main_task.done():
+            self._stopped = False
+            self.writeQueue = asyncio.Queue()
+            self._main_task = self.loop.create_task(self.main())
+
+    async def async_stop(self) -> None:
+        self._stopped = True
+        tasks = [
+            self._main_task,
+            self._listen_task,
+            self._refresh_task,
+            self._write_task,
+        ]
+        pending = []
+        for task in tasks:
+            if task is not None and not task.done():
+                task.cancel()
+                pending.append(task)
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        if self.writer is not None:
+            self.writer.close()
+        self.reader = None
+        self.writer = None
+        self.writeQueue = asyncio.Queue()
+        self._main_task = None
+        self._listen_task = None
+        self._refresh_task = None
+        self._write_task = None
+        self._set_connected(False)
+        self._set_initialized(False)
 
     async def restart(self):
         # reset everything on errrors
-        self.reader = None
-        self.writer = None
-        self.is_initialized = False
-        self.writeQueue = None
-        self.loop.create_task(self.main())
+        should_restart = not self._stopped
+        await self.async_stop()
+        if should_restart:
+            await self.async_start()
 
     async def main(self):
-
-        FirstLoop = True
-        self.loop.create_task(self.monitorWriteQueue())
-        self.loop.create_task(self.listen())
-        while True:
+        self._write_task = self.loop.create_task(self.monitorWriteQueue())
+        self._listen_task = self.loop.create_task(self.listen())
+        self._refresh_task = self.loop.create_task(self.refreshStatus())
+        while not self._stopped:
             if not self.reader or not self.writer:
                 if not self.SERIAL_PORT:
                     log.info("No serial port configured")
@@ -97,16 +169,14 @@ class AlarmPanel:
                         url=self.SERIAL_PORT, baudrate=self.BAUD_RATE
                     )
                     self.writer.write(b"\r\n")
-                # except (SerialException, OSError, FileNotFoundError):
-                except:
+                except (SerialException, OSError, FileNotFoundError):
+                    self._handle_disconnect()
                     log.exception("Caught Serial Exception")
-                    await asyncio.sleep(2)
-                    break
+                    await asyncio.sleep(5)
+                    continue
 
                 log.debug("Ademco Connected")
-            if FirstLoop:
-                self.loop.create_task(self.refreshStatus())
-                FirstLoop = False
+                self._set_connected(True)
             await asyncio.sleep(60)
 
     async def refreshStatus(self):
@@ -115,7 +185,7 @@ class AlarmPanel:
             self.zoneStatusRequest()
             await asyncio.sleep(3)
             #sometimes first attempt doesn't work.
-            while not self.is_initialized:
+            while not self.is_initialized and not self._stopped:
                 self.zoneStatusRequest()
                 await asyncio.sleep(5)
             self.outputStatusRequest()
@@ -146,8 +216,8 @@ class AlarmPanel:
                     self.handleMessage(line)
                 except CancelledError:
                     break
-                except:
-                    # traceback.print_exception(*exc_info)
+                except Exception:
+                    self._handle_disconnect()
                     log.exception("Listen function threw exception")
                     await asyncio.sleep(2)
             else:
@@ -236,7 +306,7 @@ class AlarmPanel:
     def processZoneStatusReport(self, data):
         for z, s in enumerate(data):
             self._zones[z+1].proccessStatus(int(s))
-            self.is_initialized = True
+            self._set_initialized(True)
 
     def processArmingStatusReport(self, data):
         print("ArmingStatus:" + data)
@@ -361,6 +431,12 @@ class Zone:
     
     def registerCallback(self, cb):
         self.callbackList.append(cb)
+
+        def _remove_callback() -> None:
+            if cb in self.callbackList:
+                self.callbackList.remove(cb)
+
+        return _remove_callback
 
     @property
     def partionId(self) -> int:

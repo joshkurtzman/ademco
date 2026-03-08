@@ -217,7 +217,7 @@ async def async_get_triggers(hass, device_id):
     entries = [
         entry
         for entry in async_entries_for_device(entity_registry, device_id)
-        if entry.domain == DOMAIN
+        if entry.domain == "binary_sensor"
     ]
 
     for entry in entries:

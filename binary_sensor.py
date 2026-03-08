@@ -1,105 +1,128 @@
-import homeassistant
+"""Binary sensor platform for Ademco zones."""
+
+from __future__ import annotations
+
 from homeassistant.components.binary_sensor import BinarySensorEntity
-from .ademco import Zone, Output
-import logging
-import asyncio
-
-log = logging.getLogger(__name__)
 from homeassistant.core import HomeAssistant
-from .const import DOMAIN
-from homeassistant.helpers.typing import (
-    ConfigType,
-    DiscoveryInfoType,
-)
-from typing import Callable, Optional, Sequence
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-log.debug("Loading Ademco binary sensors")
+from . import AdemcoConfigEntry
+from .ademco import Zone
+from .const import CONF_DOORS, CONF_MOTIONS, CONF_PROBLEMS, CONF_WINDOWS
+from .entity import AdemcoEntity
 
 
-def setup_platform(
+async def async_setup_entry(
     hass: HomeAssistant,
-    config: ConfigType,
-    async_add_entities: Callable[[Sequence[BinarySensorEntity], bool], None],
-    discovery_info: Optional[DiscoveryInfoType] = None,
+    entry: AdemcoConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
+    """Set up Ademco binary sensors from a config entry."""
     entities = []
-    panel = hass.data[DOMAIN]["panel"]
-    config = hass.data[DOMAIN]["config"]
+    runtime_data = entry.runtime_data
+    panel = runtime_data.panel
+    config = runtime_data.config
 
-    for x in config.get("doors", []):
-        entities.append(AdemcoZone(panel.getZone(x["id"]), x, "door"))
+    for zone_config in config.get(CONF_DOORS, []):
+        entities.append(
+            AdemcoZone(
+                panel,
+                runtime_data.device_id,
+                runtime_data.device_name,
+                panel.getZone(zone_config["id"]),
+                zone_config,
+                "door",
+            )
+        )
 
-    for x in config.get("windows", []):
+    for zone_config in config.get(CONF_WINDOWS, []):
         entities.append(
-            AdemcoZone(panel.getZone(x["id"]), x, "window")
+            AdemcoZone(
+                panel,
+                runtime_data.device_id,
+                runtime_data.device_name,
+                panel.getZone(zone_config["id"]),
+                zone_config,
+                "window",
+            )
         )
-    for x in config.get("motions", []):
+    for zone_config in config.get(CONF_MOTIONS, []):
         entities.append(
-            AdemcoZone(panel.getZone(x["id"]), x, "motion")
+            AdemcoZone(
+                panel,
+                runtime_data.device_id,
+                runtime_data.device_name,
+                panel.getZone(zone_config["id"]),
+                zone_config,
+                "motion",
+            )
         )
-    for x in config.get("problems", []):
+    for zone_config in config.get(CONF_PROBLEMS, []):
         entities.append(
-            AdemcoZone(panel.getZone(x["id"]), x, "problem")
+            AdemcoZone(
+                panel,
+                runtime_data.device_id,
+                runtime_data.device_name,
+                panel.getZone(zone_config["id"]),
+                zone_config,
+                "problem",
+            )
         )
 
     async_add_entities(entities)
-    return True
 
 
-class AdemcoZone(BinarySensorEntity):
+class AdemcoZone(AdemcoEntity, BinarySensorEntity):
+    """Representation of an Ademco zone."""
+
+    _attr_should_poll = False
+
     def __init__(
-        self, zone: Zone, config: str, deviceClass: str, output: Output = None
+        self,
+        panel,
+        device_id: str,
+        device_name: str,
+        zone: Zone,
+        config: dict[str, str],
+        device_class: str,
     ) -> None:
-        super.__init__
+        """Initialize an Ademco zone entity."""
+        super().__init__(panel, device_id, device_name)
         self._zone = zone
         self._config = config
-        self.deviceClass = deviceClass
-        self._zone.registerCallback(self.schedule_update_ha_state)
+        self._attr_device_class = device_class
+        self._attr_unique_id = f"zone_{self._zone.zoneNum}_{device_class}"
+        self._remove_zone_callback = None
 
-        if self.deviceClass == "garage_door":
-            if not output:
-                raise Exception("Output is required for garage door")
-            self.output = output
+    async def async_added_to_hass(self) -> None:
+        """Register zone update callbacks when enabled."""
+        await super().async_added_to_hass()
+        self._remove_zone_callback = self._zone.registerCallback(
+            self.schedule_update_ha_state
+        )
 
-    @property
-    def should_poll(self):
-        return False
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister callbacks."""
+        if self._remove_zone_callback is not None:
+            self._remove_zone_callback()
+            self._remove_zone_callback = None
+        await super().async_will_remove_from_hass()
 
-    @property
-    def identifiers(self):
-        return (DOMAIN, self.unique_id)
-
-
-    @property
-    def unique_id(self):
-        return "{}.zone{}".format(DOMAIN,self._zone.zoneNum)
-
-    def nameSuffix(self) -> str:
-        map = {
-            "door": " Door",
-            "window": " Window",
-            "garage_door": " Garage Door",
-            "motion": " Motion",
-            "problem": " Problem",
-        }
-        return map.get(self.deviceClass, "")
-    
     @property
     def extra_state_attributes(self):
+        """Return extra state attributes for the zone."""
         return {
-                "bypassed":self._zone.bypassed, 
-                "alarm":self._zone.alarm, 
-                "trouble":self._zone.trouble }
+            "bypassed": self._zone.bypassed,
+            "alarm": self._zone.alarm,
+            "trouble": self._zone.trouble,
+        }
 
     @property
     def name(self):
-        return "{} {}".format(self._config.get("name"), self.nameSuffix())
+        """Return the entity name relative to the panel device."""
+        return self._config.get("name")
 
     @property
     def is_on(self) -> bool:
+        """Return if the zone is currently active/open."""
         return self._zone.opened
-
-    @property
-    def device_class(self):
-        """Return the device class."""
-        return self.deviceClass
