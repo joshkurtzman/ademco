@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 from asyncio.streams import StreamReader, StreamWriter
-from typing import Callable, Dict, List
+from collections.abc import Callable
 import asyncio
 from asyncio import CancelledError
+from contextlib import suppress
 import logging
+from typing import Dict, List
 
 log = logging.getLogger(__name__)
 
@@ -42,9 +46,9 @@ class AlarmPanel:
 
         self._partitions: Dict[int, Partition] = {}
         self._partitionReport = None
-        self.reader: StreamReader = None
-        self.writer: StreamWriter = None
-        self.writeQueue = asyncio.Queue()
+        self.reader: StreamReader | None = None
+        self.writer: StreamWriter | None = None
+        self.writeQueue: asyncio.Queue[bytes] = asyncio.Queue()
         self.is_initialized = False
         self.connected = False
         self._callbacks: list[Callable[[], None]] = []
@@ -73,7 +77,10 @@ class AlarmPanel:
 
     def _notify_callbacks(self) -> None:
         for cb in list(self._callbacks):
-            cb()
+            try:
+                cb()
+            except Exception:
+                log.exception("Ademco callback raised unexpectedly")
 
     def _set_connected(self, connected: bool) -> None:
         if self.connected != connected:
@@ -94,13 +101,16 @@ class AlarmPanel:
         self._set_initialized(False)
 
     async def async_start(self) -> None:
-        if self._main_task is None or self._main_task.done():
-            self._stopped = False
-            self.writeQueue = asyncio.Queue()
-            self._main_task = self.loop.create_task(self.main())
+        if self._main_task is not None and not self._main_task.done():
+            return
+
+        self._stopped = False
+        self.writeQueue = asyncio.Queue()
+        self._main_task = self.loop.create_task(self.main())
 
     async def async_stop(self) -> None:
         self._stopped = True
+        current_task = asyncio.current_task()
         tasks = [
             self._main_task,
             self._listen_task,
@@ -110,21 +120,30 @@ class AlarmPanel:
         ]
         pending = []
         for task in tasks:
-            if task is not None and not task.done():
+            if task is not None and task is not current_task and not task.done():
                 task.cancel()
                 pending.append(task)
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         if self.writer is not None:
             self.writer.close()
+            wait_closed = getattr(self.writer, "wait_closed", None)
+            if callable(wait_closed):
+                with suppress(Exception):
+                    await wait_closed()
         self.reader = None
         self.writer = None
         self.writeQueue = asyncio.Queue()
-        self._main_task = None
-        self._listen_task = None
-        self._refresh_task = None
-        self._write_task = None
-        self._restart_task = None
+        if self._main_task is not current_task:
+            self._main_task = None
+        if self._listen_task is not current_task:
+            self._listen_task = None
+        if self._refresh_task is not current_task:
+            self._refresh_task = None
+        if self._write_task is not current_task:
+            self._write_task = None
+        if self._restart_task is not current_task:
+            self._restart_task = None
         self._set_connected(False)
         self._set_initialized(False)
 
@@ -137,10 +156,14 @@ class AlarmPanel:
 
     async def restart(self):
         # reset everything on errrors
-        should_restart = not self._stopped
-        await self.async_stop()
-        if should_restart:
-            await self.async_start()
+        try:
+            should_restart = not self._stopped
+            await self.async_stop()
+            if should_restart:
+                await self.async_start()
+        finally:
+            if self._restart_task is asyncio.current_task():
+                self._restart_task = None
 
     async def _open_serial_connection(self) -> tuple[StreamReader, StreamWriter]:
         """Open the Ademco serial transport lazily to avoid import-time overhead."""
@@ -193,7 +216,7 @@ class AlarmPanel:
             await asyncio.sleep(60)
 
     async def refreshStatus(self):
-        while True:
+        while not self._stopped:
 
             self.zoneStatusRequest()
             await asyncio.sleep(3)
@@ -222,7 +245,7 @@ class AlarmPanel:
         return self._outputs.get(int(id))
 
     async def listen(self):
-        while True:
+        while not self._stopped:
             if self.reader:
                 try:
                     line = await self.reader.readline()
@@ -238,11 +261,15 @@ class AlarmPanel:
                 await asyncio.sleep(1)
 
     def sendCommand(self, command: str):
+        if self._stopped or self.writer is None:
+            log.debug("Dropping Ademco command while disconnected: %s", command)
+            return
+
         message = bytes(command + checksum(command), "utf-8") + b"\r\n"
         self.writeQueue.put_nowait(message)
 
     async def monitorWriteQueue(self):
-        while True:
+        while not self._stopped:
             if self.writer:
                 try:
                     i = await self.writeQueue.get()
@@ -285,7 +312,11 @@ class AlarmPanel:
         message = message.lstrip(
             b"P"
         )  # Remove Ps that occasionally get sent without newlines
-        message = message.decode("ASCII")
+        try:
+            message = message.decode("ASCII")
+        except UnicodeDecodeError:
+            log.warning("Ignoring undecodable Ademco payload: %r", message)
+            return
         message = message.rstrip("\r\n")
         if not message:  # If the P was received without new line skip it silently
             return

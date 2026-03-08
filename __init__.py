@@ -1,4 +1,5 @@
 """The Ademco RS232 Alarm Panel integration."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -74,16 +75,16 @@ class AdemcoRuntimeData:
 type AdemcoConfigEntry = ConfigEntry[AdemcoRuntimeData]
 
 
-async def async_setup(hass: HomeAssistant, config) -> bool:
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the integration and import YAML if present."""
-    if DOMAIN in config:
-        hass.async_create_task(
-            hass.config_entries.flow.async_init(
-                DOMAIN,
-                context={"source": "import"},
-                data=config[DOMAIN],
-            )
-        )
+    if DOMAIN not in config:
+        return True
+
+    await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": "import"},
+        data=config[DOMAIN],
+    )
     return True
 
 
@@ -93,7 +94,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: AdemcoConfigEntry) -> bo
 
     config = dict(entry.data)
     panel = AlarmPanel(config, loop=hass.loop)
-    await panel.async_start()
 
     device_id = config.get(CONF_DEVICE) or entry.entry_id
     device_name = entry.title or DEFAULT_NAME
@@ -105,6 +105,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: AdemcoConfigEntry) -> bo
         device_name=device_name,
     )
 
+    try:
+        await panel.async_start()
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception:
+        await panel.async_stop()
+        raise
+
     log.debug(
         "Configured Ademco panel on %s with %s motion, %s door, %s window, %s garage door, %s problem zones",
         config.get(CONF_DEVICE),
@@ -115,7 +122,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: AdemcoConfigEntry) -> bo
         len(config.get(CONF_PROBLEMS, [])),
     )
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
