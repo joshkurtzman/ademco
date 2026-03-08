@@ -132,38 +132,47 @@ class AdemcoGarageDoor(AdemcoEntity, CoverEntity):
             self._status = CoverState.CLOSED
         self.schedule_update_ha_state()
 
+    async def _wait_for_status(self, target: CoverState, timeout: int = 10) -> bool:
+        """Wait for the zone callback to report the requested cover state."""
+        for _ in range(timeout):
+            await asyncio.sleep(1)
+            if self._status == target:
+                return True
+        return False
+
     async def toggleRelay(self):
         self._output.turnOn()
         await asyncio.sleep(1.5)
         self._output.turnOff()
 
     async def async_open_cover(self, **kwargs):
-        if self._status == CoverState.CLOSED:
+        if self._zone.closed:
             self._status = CoverState.OPENING
             self.schedule_update_ha_state()
             await self.toggleRelay()
-            for _ in range(0, 10):
-                await asyncio.sleep(1)
-                if self._status == CoverState.OPEN:
-                    break
-            log.critical("Garage door: {} did not open after 10 seconds".format(self.name))
-            self._update_status()
+            if not await self._wait_for_status(CoverState.OPEN):
+                log.critical("Garage door: %s did not open after 10 seconds", self.name)
+                self._update_status()
 
         else:
-            log.info("Could not open {} - State is {}".format(self.name, self._status))
+            log.info(
+                "Could not open %s - zone already reports open (status=%s)",
+                self.name,
+                self._status,
+            )
 
-            
     async def async_close_cover(self, **kwargs):
-        if self._status == CoverState.OPEN:
+        if self._zone.opened:
             self._status = CoverState.CLOSING
             self.schedule_update_ha_state()
             await self.toggleRelay()
-            for _ in range(0, 10):
-                await asyncio.sleep(1)
-                if self._status == CoverState.CLOSED:
-                    break
-            log.critical("Garage door: {} did not close after 10 seconds".format(self.name))
-            self._update_status()
+            if not await self._wait_for_status(CoverState.CLOSED):
+                log.critical("Garage door: %s did not close after 10 seconds", self.name)
+                self._update_status()
 
         else:
-            log.info("Could not close {} - State is {}".format(self.name, self._status))
+            log.info(
+                "Could not close %s - zone already reports closed (status=%s)",
+                self.name,
+                self._status,
+            )
