@@ -6,19 +6,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ID, CONF_NAME
 from homeassistant.core import HomeAssistant
-import voluptuous as vol
-from homeassistant.helpers import config_validation as cv
 
 from .const import (
-    CONF_BAUD,
     CONF_DEVICE,
-    CONF_DOORS,
-    CONF_GARAGE_DOORS,
-    CONF_MOTIONS,
-    CONF_PROBLEMS,
-    CONF_WINDOWS,
     DEFAULT_NAME,
     DOMAIN,
     PLATFORMS,
@@ -30,36 +21,6 @@ log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .ademco import AlarmPanel
-
-
-ZONE_CONFIG = vol.Schema(
-    {
-        vol.Required(CONF_ID): cv.string,
-        vol.Required(CONF_NAME): cv.string,
-        vol.Optional("latchSeconds", default=0): cv.string,
-    }
-)
-OUTPUT_CONFIG = vol.Schema(
-    {
-        vol.Required(CONF_ID): cv.string,
-        vol.Required(CONF_NAME): cv.string,
-        vol.Required("output"): cv.string,
-    }
-)
-CONFIG_SCHEMA = vol.Schema(
-    {
-        vol.Required(DOMAIN): {
-            vol.Optional(CONF_DEVICE): cv.string,
-            vol.Required(CONF_BAUD, default=1200): cv.string,
-            vol.Optional(CONF_MOTIONS): vol.All(cv.ensure_list, [ZONE_CONFIG]),
-            vol.Optional(CONF_DOORS): vol.All(cv.ensure_list, [ZONE_CONFIG]),
-            vol.Optional(CONF_WINDOWS): vol.All(cv.ensure_list, [ZONE_CONFIG]),
-            vol.Optional(CONF_PROBLEMS): vol.All(cv.ensure_list, [ZONE_CONFIG]),
-            vol.Optional(CONF_GARAGE_DOORS): vol.All(cv.ensure_list, [OUTPUT_CONFIG]),
-        }
-    },
-    extra=vol.ALLOW_EXTRA,
-)
 
 
 @dataclass
@@ -113,13 +74,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: AdemcoConfigEntry) -> bo
         raise
 
     log.debug(
-        "Configured Ademco panel on %s with %s motion, %s door, %s window, %s garage door, %s problem zones",
+        "Configured Ademco panel on %s",
         config.get(CONF_DEVICE),
-        len(config.get(CONF_MOTIONS, [])),
-        len(config.get(CONF_DOORS, [])),
-        len(config.get(CONF_WINDOWS, [])),
-        len(config.get(CONF_GARAGE_DOORS, [])),
-        len(config.get(CONF_PROBLEMS, [])),
     )
 
     return True
