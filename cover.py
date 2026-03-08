@@ -1,25 +1,23 @@
 import homeassistant
-from homeassistant.components.cover import CoverEntity, DEVICE_CLASS_GARAGE, SUPPORT_OPEN, SUPPORT_CLOSE, STATE_CLOSED, STATE_CLOSING, STATE_OPEN, STATE_OPENING
+from homeassistant.components.cover import CoverEntity, CoverEntityFeature, CoverDeviceClass, CoverState
 from .ademco import Zone, Output
 import logging
 import asyncio
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
 from homeassistant.core import HomeAssistant
 from .const import DOMAIN
 from homeassistant.helpers.typing import (
     ConfigType,
-    DiscoveryInfoType,
-    HomeAssistantType,
+    DiscoveryInfoType
 )
 from typing import Callable, Optional, Sequence
 
-log.debug("ademco loading output relays")
+log.debug("Loading Ademco output relays")
 
 
 def setup_platform(
-    hass: HomeAssistantType,
+    hass: HomeAssistant,
     config: ConfigType,
     async_add_entities: Callable[[Sequence[CoverEntity], bool], None],
     discovery_info: Optional[DiscoveryInfoType] = None,
@@ -29,8 +27,7 @@ def setup_platform(
     panel = hass.data[DOMAIN]["panel"]
     config = hass.data[DOMAIN]["config"]
 
-    for x in config.get("garagedoors"):
-        log.debug("ADEMCO" + str(x))
+    for x in config.get("garagedoors", []):
         entities.append(
             AdemcoGarageDoor(
                 panel.getZone(x["id"]),
@@ -50,7 +47,7 @@ class AdemcoGarageDoor(CoverEntity):
         self._zone = zone
         self._output = output
         self._config = config
-        self._status = STATE_OPEN if zone.opened  else STATE_CLOSED
+        self._status = CoverState.OPEN if zone.opened else CoverState.CLOSED
         self._zone.registerCallback(self._updateStatus)
     @property
     def should_poll(self):
@@ -81,11 +78,11 @@ class AdemcoGarageDoor(CoverEntity):
 
     @property
     def device_class(self):
-        return DEVICE_CLASS_GARAGE
+        return CoverDeviceClass.GARAGE
 
     @property
     def supported_features(self) -> int:
-        return SUPPORT_OPEN | SUPPORT_CLOSE
+        return CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE
 
     @property
     def current_cover_position(self):
@@ -95,13 +92,13 @@ class AdemcoGarageDoor(CoverEntity):
 
     @property
     def is_opening(self):
-        if self._status == STATE_OPENING:
+        if self._status == CoverState.OPENING:
             return True
         return False
 
     @property
     def is_closing(self):
-        if self._status == STATE_CLOSING:
+        if self._status == CoverState.CLOSING:
             return True
         return False
     
@@ -111,9 +108,9 @@ class AdemcoGarageDoor(CoverEntity):
 
     def _updateStatus(self):
         if self._zone.opened:
-            self._status = STATE_OPEN
+            self._status = CoverState.OPEN
         else:
-            self._status = STATE_CLOSED
+            self._status = CoverState.CLOSED
         self.schedule_update_ha_state()
 
     async def toggleRelay(self):
@@ -122,13 +119,13 @@ class AdemcoGarageDoor(CoverEntity):
         self._output.turnOff()
 
     async def async_open_cover(self, **kwargs):
-        if self._status == STATE_CLOSED:
-            self._status = STATE_OPENING
+        if self._status == CoverState.CLOSED:
+            self._status = CoverState.OPENING
             self.schedule_update_ha_state()
             await self.toggleRelay()
             for i in range(0,10):
                 await asyncio.sleep(1)
-                if self._status == STATE_OPEN:
+                if self._status == CoverState.OPEN:
                     break
             log.critical("Garage door: {} did not open after 10 seconds".format(self.name))
             self._updateStatus()
@@ -138,13 +135,13 @@ class AdemcoGarageDoor(CoverEntity):
 
             
     async def async_close_cover(self, **kwargs):
-        if self._status == STATE_OPEN:
-            self._status = STATE_CLOSING
+        if self._status == CoverState.OPEN:
+            self._status = CoverState.CLOSING
             self.schedule_update_ha_state()
             await self.toggleRelay()
             for i in range(0,10):
                 await asyncio.sleep(1)
-                if self._status == STATE_CLOSED:
+                if self._status == CoverState.CLOSED:
                     break
             log.critical("Garage door: {} did not close after 10 seconds".format(self.name))
             self._updateStatus()

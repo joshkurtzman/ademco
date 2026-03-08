@@ -5,7 +5,6 @@ import logging
 import asyncio
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
 from homeassistant.core import HomeAssistant
 from .const import DOMAIN
 from homeassistant.helpers.typing import (
@@ -14,7 +13,7 @@ from homeassistant.helpers.typing import (
 )
 from typing import Callable, Optional, Sequence
 
-log.debug("ademco LOADING BINARY SENSOR")
+log.debug("Loading Ademco binary sensors")
 
 
 def setup_platform(
@@ -27,22 +26,18 @@ def setup_platform(
     panel = hass.data[DOMAIN]["panel"]
     config = hass.data[DOMAIN]["config"]
 
-    for x in config.get("doors"):
-        log.debug("ADEMCO" + str(x))
+    for x in config.get("doors", []):
         entities.append(AdemcoZone(panel.getZone(x["id"]), x, "door"))
 
-    for x in config.get("windows"):
-        log.debug("ADEMCO" + str(x))
+    for x in config.get("windows", []):
         entities.append(
             AdemcoZone(panel.getZone(x["id"]), x, "window")
         )
-    for x in config.get("motions"):
-        log.debug("ADEMCO" + str(x))
+    for x in config.get("motions", []):
         entities.append(
             AdemcoZone(panel.getZone(x["id"]), x, "motion")
         )
-    for x in config.get("problems"):
-        log.debug("ADEMCO" + str(x))
+    for x in config.get("problems", []):
         entities.append(
             AdemcoZone(panel.getZone(x["id"]), x, "problem")
         )

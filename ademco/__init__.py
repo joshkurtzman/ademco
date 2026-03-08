@@ -11,7 +11,6 @@ import datetime
 import traceback
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
 
 REFRESH_INTERVAL = 3600
 
@@ -62,7 +61,7 @@ class AlarmPanel:
         self.writeQueue = asyncio.Queue()
         self.is_initialized = False
 
-        log.debug("Initializing Main")
+        log.debug("Initializing Ademco panel")
         loop.create_task(self.main())
 
     async def restart(self):
@@ -337,11 +336,12 @@ class Partition:
 
 
 class Zone:
-    def __init__(self, alarmPanel: AlarmPanel, zoneNum: int, zoneStatus:int= None) -> None:
+    def __init__(self, alarmPanel: AlarmPanel, zoneNum: int, zoneStatus:int=None, latchSeconds:int=0) -> None:
         self._alarmPanel = alarmPanel
         self.zoneNum = zoneNum
         self.bitStatus = ["0","0","0","0"]
         self.callbackList = []
+        self.latchSeconds = latchSeconds
         if zoneStatus:
             self.proccessStatus(zoneStatus)  # binary form of status
 

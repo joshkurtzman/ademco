@@ -1,35 +1,28 @@
 """The Ademco RS232 Alarm Panel integration."""
 from __future__ import annotations
 from homeassistant.components.http import CONFIG_SCHEMA
+from homeassistant.helpers.discovery import async_load_platform
 
-# from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
-
-from homeassistant.helpers.discovery import load_platform, async_load_platform
-from homeassistant.helpers.entity_component import async_update_entity
-
-# from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 import voluptuous as vol
-from homeassistant.helpers import config_validation as cv, device_registry as dr
-
-
+from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
-import asyncio
-from .ademco import AlarmPanel, Zone, Output
+from .ademco import AlarmPanel
 
 PLATFORMS = ["binary_sensor"]  # ,"alarm_control_panel", "switch"]
 import logging
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
 
 
 ZONE_CONFIG = vol.Schema(
     {vol.Required("id"): cv.string, 
-     vol.Required("name"): cv.string}
+     vol.Required("name"): cv.string,
+     vol.Optional("latchSeconds", default=0): cv.string
+     }
 )
-GARAGE_CONFIG = vol.Schema(
+OUTPUT_CONFIG = vol.Schema(
     {
         vol.Required("id"): cv.string,
         vol.Required("name"): cv.string,
@@ -44,7 +37,8 @@ CONFIG_SCHEMA = CONFIG_SCHEMA.extend(
             vol.Optional("motions"): vol.All(cv.ensure_list, [ZONE_CONFIG]),
             vol.Optional("doors"): vol.All(cv.ensure_list, [ZONE_CONFIG]),
             vol.Optional("windows"): vol.All(cv.ensure_list, [ZONE_CONFIG]),
-            vol.Optional("garagedoors"): vol.All(cv.ensure_list, [GARAGE_CONFIG]),
+            vol.Optional("problems"): vol.All(cv.ensure_list, [ZONE_CONFIG]),
+            vol.Optional("garagedoors"): vol.All(cv.ensure_list, [OUTPUT_CONFIG]),
         }
     }
 )
@@ -52,17 +46,22 @@ CONFIG_SCHEMA = CONFIG_SCHEMA.extend(
 
 async def async_setup(hass: HomeAssistant, config):
     c = config["ademco"]
-    # hass.states.async_set("ademco", "Paulus")
-    # log.debug(str(config))
     panel = AlarmPanel(c, loop=hass.loop)
     hass.data[DOMAIN] = {"panel": panel, "config": c}
 
-    log.debug("Zones" + str(panel.zones))
-    log.debug("AdemcoConfig:" + str(c))
-
+    log.debug(
+        "Configured Ademco panel on %s with %s motion, %s door, %s window, %s garage door, %s problem zones",
+        c.get("device"),
+        len(c.get("motions", [])),
+        len(c.get("doors", [])),
+        len(c.get("windows", [])),
+        len(c.get("garagedoors", [])),
+        len(c.get("problems", [])),
+    )
 
     hass.async_create_task(async_load_platform(hass, "binary_sensor", DOMAIN, {}, c))
-    hass.async_create_task(async_load_platform(hass, "cover", DOMAIN, {}, c))
+    if c.get("garagedoors"):
+        hass.async_create_task(async_load_platform(hass, "cover", DOMAIN, {}, c))
     # hass.data[DOMAIN] = {}
 
     # for door in config['garagedoor']:
