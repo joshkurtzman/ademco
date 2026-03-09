@@ -162,6 +162,7 @@ class AdemcoZone(AdemcoEntity, BinarySensorEntity):
             "bypassed": self._zone.bypassed,
             "alarm": self._zone.alarm,
             "trouble": self._zone.trouble,
+            "partition_id": self._zone.partition_id,
         }
         if self._latch_seconds > 0:
             attributes["latched"] = self._latched_on

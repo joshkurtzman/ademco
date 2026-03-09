@@ -46,7 +46,7 @@ class AlarmPanel:
             self._zones[z] = Zone(self, z)
 
         self._outputs: Dict[int, Output] = {}
-        for o in range(1, 9):
+        for o in range(1, 97):
             self._outputs[o] = Output(self, o)
 
         self._partitions: Dict[int, Partition] = {}
@@ -233,7 +233,6 @@ class AlarmPanel:
 
     async def refreshStatus(self):
         while not self._stopped:
-
             self.zoneStatusRequest()
             await asyncio.sleep(3)
             #sometimes first attempt doesn't work.
@@ -242,10 +241,12 @@ class AlarmPanel:
                 await asyncio.sleep(5)
             self.outputStatusRequest()
             await asyncio.sleep(2)
-            self.zonePartitionRequest()
+            self.armingStatusRequest()
+            await asyncio.sleep(2)
+            if self._partitionReport is None:
+                self.zonePartitionRequest()
 
             # await asyncio.sleep(2)
-            # self.armingStatusRequest()
             # TODO check that data has been received
 
             await asyncio.sleep(REFRESH_INTERVAL)
@@ -259,6 +260,9 @@ class AlarmPanel:
 
     def getOutput(self, id: int) -> "output":
         return self._outputs.get(int(id))
+
+    def getPartition(self, partition_id: int) -> "Partition | None":
+        return self._partitions.get(int(partition_id))
 
     async def listen(self):
         while not self._stopped:
@@ -369,14 +373,17 @@ class AlarmPanel:
 
     def processZoneStatusReport(self, data):
         for z, s in enumerate(data):
-            self._zones[z+1].proccessStatus(int(s))
-            self._set_initialized(True)
+            self._zones[z + 1].proccessStatus(int(s))
+        self._set_initialized(True)
 
     def processArmingStatusReport(self, data):
-        print("ArmingStatus:" + data)
         for p, s in enumerate(data):
-            if not p in self._partitions.keys():
-                self._partitions[p+1] = Partition(self, int(p+1), int(s))
+            partition_id = p + 1
+            partition = self._partitions.get(partition_id)
+            if partition is None:
+                self._partitions[partition_id] = Partition(self, partition_id, s)
+            else:
+                partition.proccessStatus(s)
 
     def processZonePartionReport(self, data):
         self._partitionReport = data
@@ -385,8 +392,12 @@ class AlarmPanel:
         for o, s in enumerate(data):
             if s == "U":
                 continue
-            if not o + 1 in self._outputs.keys():
-                self._outputs[o + 1] = Output(self, int(o + 1), s)
+            output_id = o + 1
+            output = self._outputs.get(output_id)
+            if output is None:
+                self._outputs[output_id] = Output(self, output_id, s)
+            else:
+                output.update_status(s)
 
     def processSystemEvent(self, data):
         et = data[0:2]
@@ -451,7 +462,7 @@ class AlarmPanel:
 
 class Partition:
     def __init__(self, alarmPanel: AlarmPanel, partitionNum: int, status: str):
-        self._alarmPanel = AlarmPanel
+        self._alarmPanel = alarmPanel
         self.partionNum: int = partitionNum
         self.armStatus: str = status
 
@@ -462,7 +473,7 @@ class Partition:
             return False
 
     def proccessStatus(self, status: str):
-        if status not in ["A", "H", "D"]:
+        if status not in ["A", "H", "D", "N"]:
             log.critical("Invalid partition status received {}".format(status))
         if status != self.armStatus:
             self.armStatus = status
@@ -504,7 +515,13 @@ class Zone:
 
     @property
     def partionId(self) -> int:
-        return self._alarmPanel._partitionReport[self.zoneNum - 1]
+        if not self._alarmPanel._partitionReport:
+            return 0
+        return int(self._alarmPanel._partitionReport[self.zoneNum - 1])
+
+    @property
+    def partition_id(self) -> int:
+        return self.partionId
 
     @property
     def opened(self) -> bool:
@@ -605,6 +622,9 @@ class Output:
         c = "0Acf{:0>2}00".format(self.outputId)
         self._alarmPanel.sendCommand(c)
         self._status = 0
+
+    def update_status(self, status: int | str) -> None:
+        self._status = int(status)
 
 
 # loop= asyncio.get_event_loop()

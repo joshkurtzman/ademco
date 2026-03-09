@@ -96,6 +96,7 @@ class AdemcoGarageDoor(AdemcoEntity, CoverEntity):
             "bypassed": self._zone.bypassed,
             "alarm": self._zone.alarm,
             "trouble": self._zone.trouble,
+            "partition_id": self._zone.partition_id,
         }
 
     @property
