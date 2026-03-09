@@ -19,6 +19,8 @@ This integration is configured from the Home Assistant UI only.
 - Add it from `Settings -> Devices & services`.
 - Reconfigure it later from the integration card.
 - Remove any legacy `ademco:` block from `configuration.yaml`.
+- Zone mappings are entered one per line as `id:name` or `id:name:latchSeconds`.
+- Garage doors are entered one per line as `zone:name:output`.
 
 ## Development Layout
 

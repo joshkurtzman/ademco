@@ -5,30 +5,41 @@
     },
     "error": {
       "invalid_config": "The configuration data is invalid",
-      "invalid_json": "Zone lists must be valid JSON arrays"
+      "invalid_json": "Legacy JSON input must be a valid JSON array",
+      "invalid_mapping": "Use one mapping per line in the documented format"
     },
     "step": {
+      "garage_doors": {
+        "title": "Garage doors",
+        "description": "Enter one garage door per line as zone:name:output. Example: 25:West:1",
+        "data": {
+          "garagedoors": "Garage doors"
+        }
+      },
       "reconfigure": {
         "title": "Reconfigure Ademco panel",
+        "description": "Update the serial connection used for the panel.",
         "data": {
           "device": "Device",
-          "baud": "Baud Rate",
-          "doors": "Doors JSON",
-          "windows": "Windows JSON",
-          "motions": "Motions JSON",
-          "problems": "Problems JSON",
-          "garagedoors": "Garage doors JSON"
+          "baud": "Baud rate"
         }
       },
       "user": {
+        "title": "Ademco panel",
+        "description": "Set the serial device path and baud rate for the panel connection.",
         "data": {
           "device": "Device",
-          "baud": "Baud Rate",
-          "doors": "Doors JSON",
-          "windows": "Windows JSON",
-          "motions": "Motions JSON",
-          "problems": "Problems JSON",
-          "garagedoors": "Garage doors JSON"
+          "baud": "Baud rate"
+        }
+      },
+      "zones": {
+        "title": "Zones",
+        "description": "Enter one mapping per line as id:name or id:name:latchSeconds. Example: 17:Front or 17:Front:30",
+        "data": {
+          "doors": "Doors",
+          "windows": "Windows",
+          "motions": "Motions",
+          "problems": "Problems"
         }
       }
     }

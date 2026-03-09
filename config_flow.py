@@ -10,6 +10,7 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
+from homeassistant.helpers.selector import TextSelector, TextSelectorConfig, TextSelectorType
 
 from .const import (
     CONF_BAUD,
@@ -23,6 +24,8 @@ from .const import (
     DOMAIN,
 )
 
+TEXT_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))
+
 
 def _default_title(data: dict[str, Any]) -> str:
     """Build a friendly entry title."""
@@ -30,11 +33,12 @@ def _default_title(data: dict[str, Any]) -> str:
 
 
 def _normalize_zone_list(value: Any) -> list[dict[str, str]]:
-    """Validate YAML/imported zone definitions."""
+    """Validate stored zone definitions."""
     if value is None:
         return []
     if not isinstance(value, list):
         raise ValueError
+
     normalized: list[dict[str, str]] = []
     for item in value:
         if not isinstance(item, dict):
@@ -43,20 +47,23 @@ def _normalize_zone_list(value: Any) -> list[dict[str, str]]:
         name = item.get("name")
         if zone_id is None or name is None:
             raise ValueError
+
         zone: dict[str, str] = {"id": str(zone_id), "name": str(name)}
         latch_seconds = item.get("latchSeconds")
         if latch_seconds is not None:
             zone["latchSeconds"] = str(latch_seconds)
         normalized.append(zone)
+
     return normalized
 
 
 def _normalize_garage_doors(value: Any) -> list[dict[str, str]]:
-    """Validate YAML/imported garage door definitions."""
+    """Validate stored garage door definitions."""
     if value is None:
         return []
     if not isinstance(value, list):
         raise ValueError
+
     normalized: list[dict[str, str]] = []
     for item in value:
         if not isinstance(item, dict):
@@ -66,20 +73,78 @@ def _normalize_garage_doors(value: Any) -> list[dict[str, str]]:
         output = item.get("output")
         if zone_id is None or name is None or output is None:
             raise ValueError
+
         normalized.append(
             {"id": str(zone_id), "name": str(name), "output": str(output)}
         )
+
     return normalized
 
 
-def _parse_json_list(raw_value: str, garage_doors: bool = False) -> list[dict[str, str]]:
-    """Parse JSON arrays entered through the UI."""
-    if not raw_value.strip():
+def _parse_zone_line(line: str) -> dict[str, str]:
+    """Parse a single zone line in the form id:name[:latchSeconds]."""
+    parts = [part.strip() for part in line.split(":", 2)]
+    if len(parts) < 2 or not parts[0] or not parts[1]:
+        raise ValueError
+
+    zone: dict[str, str] = {"id": parts[0], "name": parts[1]}
+    if len(parts) == 3 and parts[2]:
+        zone["latchSeconds"] = parts[2]
+    return zone
+
+
+def _parse_garage_line(line: str) -> dict[str, str]:
+    """Parse a single garage line in the form zone:name:output."""
+    parts = [part.strip() for part in line.split(":", 2)]
+    if len(parts) != 3 or not parts[0] or not parts[1] or not parts[2]:
+        raise ValueError
+
+    return {"id": parts[0], "name": parts[1], "output": parts[2]}
+
+
+def _parse_mapping_text(raw_value: str, garage_doors: bool = False) -> list[dict[str, str]]:
+    """Parse multiline mapping text or legacy JSON arrays from the UI."""
+    raw_value = raw_value.strip()
+    if not raw_value:
         return []
-    value = json.loads(raw_value)
+
+    if raw_value.startswith("["):
+        value = json.loads(raw_value)
+        if garage_doors:
+            return _normalize_garage_doors(value)
+        return _normalize_zone_list(value)
+
+    parsed: list[dict[str, str]] = []
+    parser = _parse_garage_line if garage_doors else _parse_zone_line
+    for line in raw_value.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parsed.append(parser(stripped))
+
     if garage_doors:
-        return _normalize_garage_doors(value)
-    return _normalize_zone_list(value)
+        return _normalize_garage_doors(parsed)
+    return _normalize_zone_list(parsed)
+
+
+def _serialize_zone_lines(value: Any) -> str:
+    """Render stored zone data as multiline text for the UI."""
+    lines: list[str] = []
+    for item in _normalize_zone_list(value):
+        line = f"{item['id']}:{item['name']}"
+        if "latchSeconds" in item:
+            line = f"{line}:{item['latchSeconds']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _serialize_garage_lines(value: Any) -> str:
+    """Render stored garage data as multiline text for the UI."""
+    lines = [
+        f"{item['id']}:{item['name']}:{item['output']}"
+        for item in _normalize_garage_doors(value)
+    ]
+    return "\n".join(lines)
 
 
 def _normalize_entry_data(data: dict[str, Any]) -> dict[str, Any]:
@@ -95,40 +160,51 @@ def _normalize_entry_data(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _stringify_form_value(value: Any) -> str:
-    """Convert stored config data into a stable JSON string for forms."""
-    if not value:
-        return "[]"
-    return json.dumps(value, separators=(", ", ": "))
-
-
-def _build_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
-    """Build the config form schema."""
+def _build_connection_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+    """Build the connection settings form schema."""
     defaults = defaults or {}
     return vol.Schema(
         {
-            vol.Optional(CONF_DEVICE, default=defaults.get(CONF_DEVICE, "")): str,
-            vol.Required(CONF_BAUD, default=defaults.get(CONF_BAUD, "1200")): str,
+            vol.Optional(CONF_DEVICE, default=defaults.get(CONF_DEVICE, "")): TEXT_SELECTOR,
+            vol.Required(CONF_BAUD, default=defaults.get(CONF_BAUD, "1200")): TEXT_SELECTOR,
+        }
+    )
+
+
+def _build_zone_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+    """Build the zone mappings form schema."""
+    defaults = defaults or {}
+    return vol.Schema(
+        {
             vol.Optional(
                 CONF_DOORS,
-                default=_stringify_form_value(defaults.get(CONF_DOORS)),
-            ): str,
+                default=_serialize_zone_lines(defaults.get(CONF_DOORS)),
+            ): TEXT_SELECTOR,
             vol.Optional(
                 CONF_WINDOWS,
-                default=_stringify_form_value(defaults.get(CONF_WINDOWS)),
-            ): str,
+                default=_serialize_zone_lines(defaults.get(CONF_WINDOWS)),
+            ): TEXT_SELECTOR,
             vol.Optional(
                 CONF_MOTIONS,
-                default=_stringify_form_value(defaults.get(CONF_MOTIONS)),
-            ): str,
+                default=_serialize_zone_lines(defaults.get(CONF_MOTIONS)),
+            ): TEXT_SELECTOR,
             vol.Optional(
                 CONF_PROBLEMS,
-                default=_stringify_form_value(defaults.get(CONF_PROBLEMS)),
-            ): str,
+                default=_serialize_zone_lines(defaults.get(CONF_PROBLEMS)),
+            ): TEXT_SELECTOR,
+        }
+    )
+
+
+def _build_garage_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+    """Build the garage door mappings form schema."""
+    defaults = defaults or {}
+    return vol.Schema(
+        {
             vol.Optional(
                 CONF_GARAGE_DOORS,
-                default=_stringify_form_value(defaults.get(CONF_GARAGE_DOORS)),
-            ): str,
+                default=_serialize_garage_lines(defaults.get(CONF_GARAGE_DOORS)),
+            ): TEXT_SELECTOR,
         }
     )
 
@@ -138,51 +214,100 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    def __init__(self) -> None:
+        """Initialize the config flow."""
+        self._config: dict[str, Any] = {}
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle a user-initiated flow."""
-        return await self._async_handle_config_step(user_input)
+        if self._async_current_entries():
+            return self.async_abort(reason="already_configured")
+
+        if user_input is not None:
+            self._config = {
+                CONF_DEVICE: user_input.get(CONF_DEVICE, ""),
+                CONF_BAUD: user_input.get(CONF_BAUD, "1200"),
+            }
+            return await self.async_step_zones()
+
+        self._config = {}
+        return self.async_show_form(
+            step_id="user",
+            data_schema=_build_connection_schema(),
+        )
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle a reconfiguration flow."""
-        return await self._async_handle_config_step(
-            user_input,
-            self._get_reconfigure_entry().data,
+        defaults = dict(self._get_reconfigure_entry().data)
+        if user_input is not None:
+            self._config = {**defaults, **user_input}
+            return await self.async_step_zones()
+
+        self._config = defaults
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=_build_connection_schema(defaults),
         )
 
-    async def _async_handle_config_step(
-        self,
-        user_input: dict[str, Any] | None = None,
-        defaults: dict[str, Any] | None = None,
+    async def async_step_zones(
+        self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle create and reconfigure flows."""
-        if self.source != config_entries.SOURCE_RECONFIGURE and self._async_current_entries():
-            return self.async_abort(reason="already_configured")
-
+        """Handle the zone mapping step."""
+        defaults = self._config
         errors: dict[str, str] = {}
+
         if user_input is not None:
             try:
-                data = {
-                    CONF_DEVICE: user_input[CONF_DEVICE],
-                    CONF_BAUD: user_input[CONF_BAUD],
-                    CONF_DOORS: _parse_json_list(user_input.get(CONF_DOORS, "[]")),
-                    CONF_WINDOWS: _parse_json_list(user_input.get(CONF_WINDOWS, "[]")),
-                    CONF_MOTIONS: _parse_json_list(user_input.get(CONF_MOTIONS, "[]")),
-                    CONF_PROBLEMS: _parse_json_list(user_input.get(CONF_PROBLEMS, "[]")),
-                    CONF_GARAGE_DOORS: _parse_json_list(
-                        user_input.get(CONF_GARAGE_DOORS, "[]"),
-                        garage_doors=True,
-                    ),
-                }
+                self._config.update(
+                    {
+                        CONF_DOORS: _parse_mapping_text(user_input.get(CONF_DOORS, "")),
+                        CONF_WINDOWS: _parse_mapping_text(
+                            user_input.get(CONF_WINDOWS, "")
+                        ),
+                        CONF_MOTIONS: _parse_mapping_text(
+                            user_input.get(CONF_MOTIONS, "")
+                        ),
+                        CONF_PROBLEMS: _parse_mapping_text(
+                            user_input.get(CONF_PROBLEMS, "")
+                        ),
+                    }
+                )
             except JSONDecodeError:
                 errors["base"] = "invalid_json"
             except ValueError:
-                errors["base"] = "invalid_config"
+                errors["base"] = "invalid_mapping"
             else:
-                normalized = _normalize_entry_data(data)
+                return await self.async_step_garage_doors()
+
+        return self.async_show_form(
+            step_id="zones",
+            data_schema=_build_zone_schema(defaults),
+            errors=errors,
+        )
+
+    async def async_step_garage_doors(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle the garage door mapping step."""
+        defaults = self._config
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            try:
+                self._config[CONF_GARAGE_DOORS] = _parse_mapping_text(
+                    user_input.get(CONF_GARAGE_DOORS, ""),
+                    garage_doors=True,
+                )
+            except JSONDecodeError:
+                errors["base"] = "invalid_json"
+            except ValueError:
+                errors["base"] = "invalid_mapping"
+            else:
+                normalized = _normalize_entry_data(self._config)
                 if self.source == config_entries.SOURCE_RECONFIGURE:
                     return self.async_update_reload_and_abort(
                         self._get_reconfigure_entry(),
@@ -194,9 +319,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data=normalized,
                 )
 
-        step_id = "reconfigure" if self.source == config_entries.SOURCE_RECONFIGURE else "user"
         return self.async_show_form(
-            step_id=step_id,
-            data_schema=_build_schema(defaults),
+            step_id="garage_doors",
+            data_schema=_build_garage_schema(defaults),
             errors=errors,
         )
