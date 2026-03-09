@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 
 from .const import (
     CONF_DEVICE,
@@ -70,6 +71,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: AdemcoConfigEntry) -> bo
 
     device_id = config.get(CONF_DEVICE) or entry.entry_id
     device_name = panel_name
+
+    device_registry = dr.async_get(hass)
+    if device := device_registry.async_get_device(identifiers={(DOMAIN, device_id)}):
+        if device.name_by_user is None and device.name != device_name:
+            device_registry.async_update_device(device.id, name=device_name)
 
     entry.runtime_data = AdemcoRuntimeData(
         panel=panel,
