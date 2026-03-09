@@ -2,7 +2,7 @@
 
 DOMAIN = "ademco"
 
-PLATFORMS = ["binary_sensor", "cover", "alarm_control_panel"]
+PLATFORMS = ["binary_sensor", "cover", "alarm_control_panel", "switch"]
 
 MANUFACTURER = "Ademco"
 MODEL = "RS232 Alarm Panel"

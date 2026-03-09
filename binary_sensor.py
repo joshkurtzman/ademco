@@ -20,10 +20,10 @@ from homeassistant.helpers.entity_platform import (
 )
 
 from . import AdemcoConfigEntry
+from .bypass import build_partition_configs, supports_bypass, validate_bypass_request
 from .const import (
     CONF_DOORS,
     CONF_MOTIONS,
-    CONF_PARTITIONS,
     CONF_PROBLEMS,
     CONF_WINDOWS,
 )
@@ -43,11 +43,7 @@ async def async_setup_entry(
     runtime_data = entry.runtime_data
     panel = runtime_data.panel
     config = runtime_data.config
-    partition_configs = {
-        int(item["id"]): item
-        for item in config.get(CONF_PARTITIONS, [])
-        if str(item.get("id", "")).isdigit()
-    }
+    partition_configs = build_partition_configs(config)
     platform = async_get_current_platform()
 
     for zone_config in config.get(CONF_DOORS, []):
@@ -225,29 +221,30 @@ class AdemcoZone(AdemcoEntity, BinarySensorEntity):
 
     @property
     def _supports_bypass(self) -> bool:
-        partition_config = self._partition_configs.get(self._zone.partition_id, {})
-        return self._zone_type in {"door", "window", "motion"} and bool(
-            partition_config.get("userNumber")
+        return supports_bypass(
+            self._zone_type,
+            self._zone.partition_id,
+            self._partition_configs,
         )
 
     async def async_bypass_zone(self, code: str) -> None:
         """Bypass this zone using the partition's configured user number."""
-        if not self._supports_bypass:
-            raise HomeAssistantError(
-                f"{self.name} is not configured for Ademco bypass control"
-            )
-        if self._zone.partition_id <= 0:
-            raise HomeAssistantError(f"{self.name} has no valid partition")
+        validate_bypass_request(
+            self.name,
+            self._zone_type,
+            self._zone.partition_id,
+            self._partition_configs,
+        )
         self._panel.bypassZone(self._zone.partition_id, code, self._zone.zoneNum)
 
     async def async_unbypass_zone(self, code: str) -> None:
         """Unbypass this zone using the same Ademco keypad toggle sequence."""
-        if not self._supports_bypass:
-            raise HomeAssistantError(
-                f"{self.name} is not configured for Ademco bypass control"
-            )
-        if self._zone.partition_id <= 0:
-            raise HomeAssistantError(f"{self.name} has no valid partition")
+        validate_bypass_request(
+            self.name,
+            self._zone_type,
+            self._zone.partition_id,
+            self._partition_configs,
+        )
         if not self._zone.bypassed:
             raise HomeAssistantError(f"{self.name} is not currently bypassed")
         self._panel.bypassZone(self._zone.partition_id, code, self._zone.zoneNum)
