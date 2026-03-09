@@ -336,6 +336,23 @@ class AlarmPanel:
         payload = f"{int(user_number_str):02d}{user_code_str}00"
         return f"0E{command}{payload}"
 
+    def _build_keypad_command(self, partition_id: int | str, keys: str) -> str:
+        partition_str = str(partition_id).strip()
+        keys_str = str(keys).strip()
+
+        if not partition_str.isdigit():
+            raise ValueError("Partition must be numeric")
+        if len(partition_str) != 1:
+            raise ValueError("Partition must be a single digit")
+        if not keys_str or len(keys_str) > 5:
+            raise ValueError("Keypad command must be 1 to 5 keystrokes")
+        if not keys_str.isdigit():
+            raise ValueError("Keypad command must be numeric")
+
+        body = f"ks{partition_str}{keys_str}00"
+        length = len(body) + 4
+        return f"{length:02X}{body}"
+
     def armAway(self, user_number: int | str, user_code: str) -> None:
         self.sendCommand(
             self._build_partition_control_command("aa", user_number, user_code)
@@ -350,6 +367,28 @@ class AlarmPanel:
         self.sendCommand(
             self._build_partition_control_command("ad", user_number, user_code)
         )
+
+    def sendKeypad(self, partition_id: int | str, keys: str) -> None:
+        self.sendCommand(self._build_keypad_command(partition_id, keys))
+
+    def bypassZone(
+        self,
+        partition_id: int | str,
+        user_code: str,
+        zone_number: int | str,
+    ) -> None:
+        zone_str = str(zone_number).strip()
+        code_str = str(user_code).strip()
+
+        if not zone_str.isdigit():
+            raise ValueError("Zone number must be numeric")
+        if len(code_str) != 4 or not code_str.isdigit():
+            raise ValueError("User code must be exactly 4 digits")
+
+        # Emulate keypad entry: [code][6] then [zone], which is how single-zone
+        # bypass is exposed on VISTA keypads.
+        self.sendKeypad(partition_id, f"{code_str}6")
+        self.sendKeypad(partition_id, f"{int(zone_str):03d}")
 
     def armingStatusRequest(self):
         self.sendCommand("08as00")

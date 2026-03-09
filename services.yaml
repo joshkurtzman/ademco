@@ -1,0 +1,15 @@
+ademco_bypass:
+  name: Bypass zone
+  description: Send the Ademco keypad bypass sequence for a configured binary sensor zone.
+  target:
+    entity:
+      integration: ademco
+      domain: binary_sensor
+  fields:
+    code:
+      name: User code
+      description: Four-digit alarm code entered at call time. The configured partition user number is supplied separately by the integration.
+      required: true
+      example: "1234"
+      selector:
+        text:
