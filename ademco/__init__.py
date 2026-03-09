@@ -255,6 +255,10 @@ class AlarmPanel:
     def zones(self) -> List["Zone"]:
         return [i for i in self._zones.values()]
 
+    @property
+    def partitions(self) -> List["Partition"]:
+        return [i for i in self._partitions.values()]
+
     def getZone(self, zoneId: int) -> "Zone":
         return self._zones.get(int(zoneId))
 
@@ -377,16 +381,22 @@ class AlarmPanel:
         self._set_initialized(True)
 
     def processArmingStatusReport(self, data):
+        changed = False
         for p, s in enumerate(data):
             partition_id = p + 1
             partition = self._partitions.get(partition_id)
             if partition is None:
                 self._partitions[partition_id] = Partition(self, partition_id, s)
+                changed = True
             else:
-                partition.proccessStatus(s)
+                changed = partition.proccessStatus(s) or changed
+        if changed:
+            self._notify_callbacks()
 
     def processZonePartionReport(self, data):
-        self._partitionReport = data
+        if data != self._partitionReport:
+            self._partitionReport = data
+            self._notify_callbacks()
 
     def processOutputStatusReport(self, data):
         for o, s in enumerate(data):
@@ -472,12 +482,19 @@ class Partition:
         else:
             return False
 
+    @property
+    def ready(self) -> bool:
+        return self.armStatus != "N"
+
     def proccessStatus(self, status: str):
         if status not in ["A", "H", "D", "N"]:
             log.critical("Invalid partition status received {}".format(status))
+            return False
         if status != self.armStatus:
             self.armStatus = status
             # TODO trigger update notification
+            return True
+        return False
 
 
 class Zone:
