@@ -259,6 +259,12 @@ class AlarmPanel:
     def partitions(self) -> List["Partition"]:
         return [i for i in self._partitions.values()]
 
+    @property
+    def active_partition_ids(self) -> List[int]:
+        if not self._partitionReport:
+            return []
+        return sorted({int(partition_id) for partition_id in self._partitionReport if partition_id != "0"})
+
     def getZone(self, zoneId: int) -> "Zone":
         return self._zones.get(int(zoneId))
 

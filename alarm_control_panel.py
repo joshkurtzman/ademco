@@ -32,8 +32,14 @@ async def async_setup_entry(
     @callback
     def async_add_new_partitions() -> None:
         entities: list[AdemcoPartition] = []
+        active_partition_ids = set(panel.active_partition_ids)
+        if not active_partition_ids:
+            return
+
         for partition in sorted(panel.partitions, key=lambda item: item.partionNum):
             partition_id = partition.partionNum
+            if partition_id not in active_partition_ids:
+                continue
             if partition_id in known_partition_ids:
                 continue
             known_partition_ids.add(partition_id)
