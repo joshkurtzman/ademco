@@ -106,6 +106,11 @@ async def async_setup_entry(
         {vol.Required("code"): str},
         "async_bypass_zone",
     )
+    platform.async_register_entity_service(
+        "ademco_unbypass",
+        {vol.Required("code"): str},
+        "async_unbypass_zone",
+    )
 
 
 class AdemcoZone(AdemcoEntity, BinarySensorEntity):
@@ -233,4 +238,16 @@ class AdemcoZone(AdemcoEntity, BinarySensorEntity):
             )
         if self._zone.partition_id <= 0:
             raise HomeAssistantError(f"{self.name} has no valid partition")
+        self._panel.bypassZone(self._zone.partition_id, code, self._zone.zoneNum)
+
+    async def async_unbypass_zone(self, code: str) -> None:
+        """Unbypass this zone using the same Ademco keypad toggle sequence."""
+        if not self._supports_bypass:
+            raise HomeAssistantError(
+                f"{self.name} is not configured for Ademco bypass control"
+            )
+        if self._zone.partition_id <= 0:
+            raise HomeAssistantError(f"{self.name} has no valid partition")
+        if not self._zone.bypassed:
+            raise HomeAssistantError(f"{self.name} is not currently bypassed")
         self._panel.bypassZone(self._zone.partition_id, code, self._zone.zoneNum)
