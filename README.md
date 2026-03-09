@@ -22,6 +22,8 @@ This integration is configured from the Home Assistant UI only.
 - Remove any legacy `ademco:` block from `configuration.yaml`.
 - Zone mappings are entered one per line as `id:name` or `id:name:latchSeconds`.
 - Garage doors are entered one per line as `zone:name:output`.
+- Optional partition control mappings are entered one per line as `partition:userNumber[:name]`.
+- Partition control does not store your alarm code. Home Assistant will prompt for the 4-digit code when you arm or disarm, and the configured `userNumber` is combined with that code into the panel command.
 
 ## Development Layout
 

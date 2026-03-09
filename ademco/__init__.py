@@ -317,14 +317,39 @@ class AlarmPanel:
             else:
                 await asyncio.sleep(2)
 
-    def armAway(self, userCode):
-        self.sendCommand(" ")
+    def _build_partition_control_command(
+        self, command: str, user_number: int | str, user_code: str
+    ) -> str:
+        user_number_str = str(user_number).strip()
+        user_code_str = str(user_code).strip()
 
-    def armHome(self, userCode):
-        self.sendCommand(" ")
+        if not user_number_str.isdigit():
+            raise ValueError("User number must be numeric")
+        if not user_code_str.isdigit():
+            raise ValueError("User code must be numeric")
 
-    def disam(self, userCode):
-        self.sendCommand(" ")
+        if len(user_number_str) > 2:
+            raise ValueError("User number must be 1 or 2 digits")
+        if len(user_code_str) != 4:
+            raise ValueError("User code must be exactly 4 digits")
+
+        payload = f"{int(user_number_str):02d}{user_code_str}00"
+        return f"0E{command}{payload}"
+
+    def armAway(self, user_number: int | str, user_code: str) -> None:
+        self.sendCommand(
+            self._build_partition_control_command("aa", user_number, user_code)
+        )
+
+    def armHome(self, user_number: int | str, user_code: str) -> None:
+        self.sendCommand(
+            self._build_partition_control_command("ah", user_number, user_code)
+        )
+
+    def disam(self, user_number: int | str, user_code: str) -> None:
+        self.sendCommand(
+            self._build_partition_control_command("ad", user_number, user_code)
+        )
 
     def armingStatusRequest(self):
         self.sendCommand("08as00")

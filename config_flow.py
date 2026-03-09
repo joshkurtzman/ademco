@@ -19,6 +19,7 @@ from .const import (
     CONF_GARAGE_DOORS,
     CONF_MOTIONS,
     CONF_NAME,
+    CONF_PARTITIONS,
     CONF_PROBLEMS,
     CONF_WINDOWS,
     DEFAULT_NAME,
@@ -83,6 +84,34 @@ def _normalize_garage_doors(value: Any) -> list[dict[str, str]]:
     return normalized
 
 
+def _normalize_partitions(value: Any) -> list[dict[str, str]]:
+    """Validate stored partition definitions."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError
+
+    normalized: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError
+        partition_id = item.get("id")
+        user_number = item.get("userNumber")
+        if partition_id is None or user_number is None:
+            raise ValueError
+
+        partition: dict[str, str] = {
+            "id": str(partition_id),
+            "userNumber": str(user_number),
+        }
+        name = item.get("name")
+        if name is not None and str(name).strip():
+            partition["name"] = str(name).strip()
+        normalized.append(partition)
+
+    return normalized
+
+
 def _parse_zone_line(line: str) -> dict[str, str]:
     """Parse a single zone line in the form id:name[:latchSeconds]."""
     parts = [part.strip() for part in line.split(":", 2)]
@@ -104,7 +133,23 @@ def _parse_garage_line(line: str) -> dict[str, str]:
     return {"id": parts[0], "name": parts[1], "output": parts[2]}
 
 
-def _parse_mapping_text(raw_value: str, garage_doors: bool = False) -> list[dict[str, str]]:
+def _parse_partition_line(line: str) -> dict[str, str]:
+    """Parse a partition line in the form partition:userNumber[:name]."""
+    parts = [part.strip() for part in line.split(":", 2)]
+    if len(parts) < 2 or not parts[0] or not parts[1]:
+        raise ValueError
+
+    partition: dict[str, str] = {"id": parts[0], "userNumber": parts[1]}
+    if len(parts) == 3 and parts[2]:
+        partition["name"] = parts[2]
+    return partition
+
+
+def _parse_mapping_text(
+    raw_value: str,
+    garage_doors: bool = False,
+    partitions: bool = False,
+) -> list[dict[str, str]]:
     """Parse multiline mapping text or legacy JSON arrays from the UI."""
     raw_value = raw_value.strip()
     if not raw_value:
@@ -112,18 +157,27 @@ def _parse_mapping_text(raw_value: str, garage_doors: bool = False) -> list[dict
 
     if raw_value.startswith("["):
         value = json.loads(raw_value)
+        if partitions:
+            return _normalize_partitions(value)
         if garage_doors:
             return _normalize_garage_doors(value)
         return _normalize_zone_list(value)
 
     parsed: list[dict[str, str]] = []
-    parser = _parse_garage_line if garage_doors else _parse_zone_line
+    if partitions:
+        parser = _parse_partition_line
+    elif garage_doors:
+        parser = _parse_garage_line
+    else:
+        parser = _parse_zone_line
     for line in raw_value.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
         parsed.append(parser(stripped))
 
+    if partitions:
+        return _normalize_partitions(parsed)
     if garage_doors:
         return _normalize_garage_doors(parsed)
     return _normalize_zone_list(parsed)
@@ -149,6 +203,17 @@ def _serialize_garage_lines(value: Any) -> str:
     return "\n".join(lines)
 
 
+def _serialize_partition_lines(value: Any) -> str:
+    """Render stored partition data as multiline text for the UI."""
+    lines: list[str] = []
+    for item in _normalize_partitions(value):
+        line = f"{item['id']}:{item['userNumber']}"
+        if "name" in item:
+            line = f"{line}:{item['name']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _normalize_entry_data(data: dict[str, Any]) -> dict[str, Any]:
     """Normalize config entry data from a flow step."""
     return {
@@ -160,6 +225,7 @@ def _normalize_entry_data(data: dict[str, Any]) -> dict[str, Any]:
         CONF_MOTIONS: _normalize_zone_list(data.get(CONF_MOTIONS, [])),
         CONF_PROBLEMS: _normalize_zone_list(data.get(CONF_PROBLEMS, [])),
         CONF_GARAGE_DOORS: _normalize_garage_doors(data.get(CONF_GARAGE_DOORS, [])),
+        CONF_PARTITIONS: _normalize_partitions(data.get(CONF_PARTITIONS, [])),
     }
 
 
@@ -208,6 +274,19 @@ def _build_garage_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             vol.Optional(
                 CONF_GARAGE_DOORS,
                 default=_serialize_garage_lines(defaults.get(CONF_GARAGE_DOORS)),
+            ): TEXT_SELECTOR,
+        }
+    )
+
+
+def _build_partition_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+    """Build the partition mappings form schema."""
+    defaults = defaults or {}
+    return vol.Schema(
+        {
+            vol.Optional(
+                CONF_PARTITIONS,
+                default=_serialize_partition_lines(defaults.get(CONF_PARTITIONS)),
             ): TEXT_SELECTOR,
         }
     )
@@ -312,6 +391,32 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except ValueError:
                 errors["base"] = "invalid_mapping"
             else:
+                return await self.async_step_partitions()
+
+        return self.async_show_form(
+            step_id="garage_doors",
+            data_schema=_build_garage_schema(defaults),
+            errors=errors,
+        )
+
+    async def async_step_partitions(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle the optional partition control mapping step."""
+        defaults = self._config
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            try:
+                self._config[CONF_PARTITIONS] = _parse_mapping_text(
+                    user_input.get(CONF_PARTITIONS, ""),
+                    partitions=True,
+                )
+            except JSONDecodeError:
+                errors["base"] = "invalid_json"
+            except ValueError:
+                errors["base"] = "invalid_mapping"
+            else:
                 normalized = _normalize_entry_data(self._config)
                 if self.source == config_entries.SOURCE_RECONFIGURE:
                     return self.async_update_reload_and_abort(
@@ -325,7 +430,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
 
         return self.async_show_form(
-            step_id="garage_doors",
-            data_schema=_build_garage_schema(defaults),
+            step_id="partitions",
+            data_schema=_build_partition_schema(defaults),
             errors=errors,
         )

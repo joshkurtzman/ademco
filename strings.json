@@ -16,6 +16,13 @@
           "garagedoors": "Garage doors"
         }
       },
+      "partitions": {
+        "title": "Partitions",
+        "description": "Optional. Enter one controllable partition per line as partition:userNumber[:name]. Example: 1:02:Exterior. The panel guide's arm/disarm command uses a user number plus the code entered in Home Assistant.",
+        "data": {
+          "partitions": "Controllable partitions"
+        }
+      },
       "reconfigure": {
         "title": "Reconfigure Ademco panel",
         "description": "Update the serial connection used for the panel.",
