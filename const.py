@@ -8,6 +8,7 @@ MANUFACTURER = "Ademco"
 MODEL = "RS232 Alarm Panel"
 DEFAULT_NAME = "Ademco Panel"
 
+CONF_NAME = "name"
 CONF_DEVICE = "device"
 CONF_BAUD = "baud"
 CONF_DOORS = "doors"

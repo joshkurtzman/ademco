@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     CONF_DEVICE,
+    CONF_NAME,
     DEFAULT_NAME,
     DOMAIN,
     PLATFORMS,
@@ -53,10 +54,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: AdemcoConfigEntry) -> bo
     from .ademco import AlarmPanel
 
     config = dict(entry.data)
+    panel_name = str(config.get(CONF_NAME, "")).strip()
+    if not panel_name:
+        panel_name = (
+            entry.title
+            if entry.title and entry.title != config.get(CONF_DEVICE)
+            else DEFAULT_NAME
+        )
+        config[CONF_NAME] = panel_name
+        hass.config_entries.async_update_entry(entry, data=config, title=panel_name)
+    elif entry.title != panel_name:
+        hass.config_entries.async_update_entry(entry, title=panel_name)
+
     panel = AlarmPanel(config, loop=hass.loop)
 
     device_id = config.get(CONF_DEVICE) or entry.entry_id
-    device_name = entry.title or DEFAULT_NAME
+    device_name = panel_name
 
     entry.runtime_data = AdemcoRuntimeData(
         panel=panel,

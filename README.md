@@ -18,6 +18,7 @@ This integration is configured from the Home Assistant UI only.
 
 - Add it from `Settings -> Devices & services`.
 - Reconfigure it later from the integration card.
+- Set a friendly panel name in the config flow; it is used for the config entry and device.
 - Remove any legacy `ademco:` block from `configuration.yaml`.
 - Zone mappings are entered one per line as `id:name` or `id:name:latchSeconds`.
 - Garage doors are entered one per line as `zone:name:output`.

@@ -18,6 +18,7 @@ from .const import (
     CONF_DOORS,
     CONF_GARAGE_DOORS,
     CONF_MOTIONS,
+    CONF_NAME,
     CONF_PROBLEMS,
     CONF_WINDOWS,
     DEFAULT_NAME,
@@ -29,7 +30,8 @@ TEXT_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))
 
 def _default_title(data: dict[str, Any]) -> str:
     """Build a friendly entry title."""
-    return DEFAULT_NAME
+    name = str(data.get(CONF_NAME, "")).strip()
+    return name or DEFAULT_NAME
 
 
 def _normalize_zone_list(value: Any) -> list[dict[str, str]]:
@@ -150,6 +152,7 @@ def _serialize_garage_lines(value: Any) -> str:
 def _normalize_entry_data(data: dict[str, Any]) -> dict[str, Any]:
     """Normalize config entry data from a flow step."""
     return {
+        CONF_NAME: str(data.get(CONF_NAME, "")).strip() or DEFAULT_NAME,
         CONF_DEVICE: str(data.get(CONF_DEVICE, "")).strip(),
         CONF_BAUD: str(data.get(CONF_BAUD, "1200")).strip() or "1200",
         CONF_DOORS: _normalize_zone_list(data.get(CONF_DOORS, [])),
@@ -165,6 +168,7 @@ def _build_connection_schema(defaults: dict[str, Any] | None = None) -> vol.Sche
     defaults = defaults or {}
     return vol.Schema(
         {
+            vol.Optional(CONF_NAME, default=defaults.get(CONF_NAME, DEFAULT_NAME)): TEXT_SELECTOR,
             vol.Optional(CONF_DEVICE, default=defaults.get(CONF_DEVICE, "")): TEXT_SELECTOR,
             vol.Required(CONF_BAUD, default=defaults.get(CONF_BAUD, "1200")): TEXT_SELECTOR,
         }
@@ -227,6 +231,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             self._config = {
+                CONF_NAME: user_input.get(CONF_NAME, DEFAULT_NAME),
                 CONF_DEVICE: user_input.get(CONF_DEVICE, ""),
                 CONF_BAUD: user_input.get(CONF_BAUD, "1200"),
             }

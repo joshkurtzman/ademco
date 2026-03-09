@@ -20,6 +20,7 @@
         "title": "Reconfigure Ademco panel",
         "description": "Update the serial connection used for the panel.",
         "data": {
+          "name": "Panel name",
           "device": "Device",
           "baud": "Baud rate"
         }
@@ -28,6 +29,7 @@
         "title": "Ademco panel",
         "description": "Set the serial device path and baud rate for the panel connection.",
         "data": {
+          "name": "Panel name",
           "device": "Device",
           "baud": "Baud rate"
         }
