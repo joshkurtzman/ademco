@@ -75,6 +75,7 @@ class AdemcoGarageDoor(AdemcoEntity, CoverEntity):
         self._status = CoverState.OPEN if zone.opened else CoverState.CLOSED
         self._attr_unique_id = f"ademco.zone{self._zone.zoneNum}"
         self._remove_zone_callback = None
+        self._operation_lock = asyncio.Lock()
 
     async def async_added_to_hass(self) -> None:
         """Register zone updates when the entity is added."""
@@ -149,33 +150,49 @@ class AdemcoGarageDoor(AdemcoEntity, CoverEntity):
         self._output.turnOff()
 
     async def async_open_cover(self, **kwargs):
-        if self._zone.closed:
-            self._status = CoverState.OPENING
-            self.schedule_update_ha_state()
-            await self.toggleRelay()
-            if not await self._wait_for_status(CoverState.OPEN):
-                log.critical("Garage door: %s did not open after 10 seconds", self.name)
-                self._update_status()
+        if not self._panel.available:
+            log.warning("Could not open %s - panel is unavailable", self.name)
+            return
 
-        else:
-            log.info(
-                "Could not open %s - zone already reports open (status=%s)",
-                self.name,
-                self._status,
-            )
+        if self._operation_lock.locked():
+            log.info("Ignoring open request for %s - operation already in progress", self.name)
+            return
+
+        async with self._operation_lock:
+            if self._zone.closed:
+                self._status = CoverState.OPENING
+                self.schedule_update_ha_state()
+                await self.toggleRelay()
+                if not await self._wait_for_status(CoverState.OPEN):
+                    log.critical("Garage door: %s did not open after 10 seconds", self.name)
+                    self._update_status()
+            else:
+                log.info(
+                    "Could not open %s - zone already reports open (status=%s)",
+                    self.name,
+                    self._status,
+                )
 
     async def async_close_cover(self, **kwargs):
-        if self._zone.opened:
-            self._status = CoverState.CLOSING
-            self.schedule_update_ha_state()
-            await self.toggleRelay()
-            if not await self._wait_for_status(CoverState.CLOSED):
-                log.critical("Garage door: %s did not close after 10 seconds", self.name)
-                self._update_status()
+        if not self._panel.available:
+            log.warning("Could not close %s - panel is unavailable", self.name)
+            return
 
-        else:
-            log.info(
-                "Could not close %s - zone already reports closed (status=%s)",
-                self.name,
-                self._status,
-            )
+        if self._operation_lock.locked():
+            log.info("Ignoring close request for %s - operation already in progress", self.name)
+            return
+
+        async with self._operation_lock:
+            if self._zone.opened:
+                self._status = CoverState.CLOSING
+                self.schedule_update_ha_state()
+                await self.toggleRelay()
+                if not await self._wait_for_status(CoverState.CLOSED):
+                    log.critical("Garage door: %s did not close after 10 seconds", self.name)
+                    self._update_status()
+            else:
+                log.info(
+                    "Could not close %s - zone already reports closed (status=%s)",
+                    self.name,
+                    self._status,
+                )
