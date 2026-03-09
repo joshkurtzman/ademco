@@ -8,6 +8,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
+from homeassistant.core import callback
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -105,9 +106,7 @@ class AdemcoZone(AdemcoEntity, BinarySensorEntity):
     async def async_added_to_hass(self) -> None:
         """Register zone update callbacks when enabled."""
         await super().async_added_to_hass()
-        self._remove_zone_callback = self._zone.registerCallback(
-            self.schedule_update_ha_state
-        )
+        self._remove_zone_callback = self._zone.registerCallback(self._handle_zone_update)
 
     async def async_will_remove_from_hass(self) -> None:
         """Unregister callbacks."""
@@ -115,6 +114,11 @@ class AdemcoZone(AdemcoEntity, BinarySensorEntity):
             self._remove_zone_callback()
             self._remove_zone_callback = None
         await super().async_will_remove_from_hass()
+
+    @callback
+    def _handle_zone_update(self) -> None:
+        """Write state after a zone update."""
+        self.async_write_ha_state()
 
     @property
     def extra_state_attributes(self):

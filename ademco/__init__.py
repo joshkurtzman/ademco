@@ -6,7 +6,7 @@ import asyncio
 from asyncio import CancelledError
 from contextlib import suppress
 import logging
-from typing import Dict, List
+from typing import Any, Dict, List
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +30,12 @@ def checksum(s: str) -> str:
 
 
 class AlarmPanel:
-    def __init__(self, config: dict, loop: asyncio.AbstractEventLoop | None = None) -> None:
+    def __init__(
+        self,
+        config: dict,
+        loop: asyncio.AbstractEventLoop | None = None,
+        create_task: Callable[[Any, str], asyncio.Task] | None = None,
+    ) -> None:
         self.loop = loop or asyncio.get_running_loop()
         self.SERIAL_PORT = config.get("device", "/dev/ttyUSB0")
         self.BAUD_RATE = config.get("baud", "1200")
@@ -59,6 +64,7 @@ class AlarmPanel:
         self._restart_task: asyncio.Task | None = None
         self._connect_lock = asyncio.Lock()
         self._stopped = False
+        self._create_task = create_task
 
         log.debug("Initializing Ademco panel")
 
@@ -100,13 +106,19 @@ class AlarmPanel:
         self._set_connected(False)
         self._set_initialized(False)
 
+    def _create_background_task(self, coro: Any, name: str) -> asyncio.Task:
+        """Create a background task for panel runtime work."""
+        if self._create_task is not None:
+            return self._create_task(coro, name)
+        return self.loop.create_task(coro)
+
     async def async_start(self) -> None:
         if self._main_task is not None and not self._main_task.done():
             return
 
         self._stopped = False
         self.writeQueue = asyncio.Queue()
-        self._main_task = self.loop.create_task(self.main())
+        self._main_task = self._create_background_task(self.main(), "main")
 
     async def async_stop(self) -> None:
         self._stopped = True
@@ -152,7 +164,7 @@ class AlarmPanel:
         if self._stopped:
             return
         if self._restart_task is None or self._restart_task.done():
-            self._restart_task = self.loop.create_task(self.restart())
+            self._restart_task = self._create_background_task(self.restart(), "restart")
 
     async def restart(self):
         # reset everything on errrors
@@ -175,9 +187,13 @@ class AlarmPanel:
         )
 
     async def main(self):
-        self._write_task = self.loop.create_task(self.monitorWriteQueue())
-        self._listen_task = self.loop.create_task(self.listen())
-        self._refresh_task = self.loop.create_task(self.refreshStatus())
+        self._write_task = self._create_background_task(
+            self.monitorWriteQueue(), "write_queue"
+        )
+        self._listen_task = self._create_background_task(self.listen(), "listen")
+        self._refresh_task = self._create_background_task(
+            self.refreshStatus(), "refresh_status"
+        )
         while not self._stopped:
             if not self.reader or not self.writer:
                 if not self.SERIAL_PORT:

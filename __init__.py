@@ -67,7 +67,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: AdemcoConfigEntry) -> bo
     elif entry.title != panel_name:
         hass.config_entries.async_update_entry(entry, title=panel_name)
 
-    panel = AlarmPanel(config, loop=hass.loop)
+    panel = AlarmPanel(
+        config,
+        loop=hass.loop,
+        create_task=lambda coro, name: entry.async_create_background_task(
+            hass, coro, f"{DOMAIN}_{name}"
+        ),
+    )
 
     device_id = config.get(CONF_DEVICE) or entry.entry_id
     device_name = panel_name

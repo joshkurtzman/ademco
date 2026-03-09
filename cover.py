@@ -12,7 +12,7 @@ from homeassistant.components.cover import (
     CoverEntityFeature,
     CoverState,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import AdemcoConfigEntry
@@ -124,17 +124,18 @@ class AdemcoGarageDoor(AdemcoEntity, CoverEntity):
         if self._status == CoverState.CLOSING:
             return True
         return False
-    
+
     @property
     def is_closed(self):
         return self._zone.closed
 
+    @callback
     def _update_status(self):
         if self._zone.opened:
             self._status = CoverState.OPEN
         else:
             self._status = CoverState.CLOSED
-        self.schedule_update_ha_state()
+        self.async_write_ha_state()
 
     async def _wait_for_status(self, target: CoverState, timeout: int = 10) -> bool:
         """Wait for the zone callback to report the requested cover state."""
@@ -161,7 +162,7 @@ class AdemcoGarageDoor(AdemcoEntity, CoverEntity):
         async with self._operation_lock:
             if self._zone.closed:
                 self._status = CoverState.OPENING
-                self.schedule_update_ha_state()
+                self.async_write_ha_state()
                 await self.toggleRelay()
                 if not await self._wait_for_status(CoverState.OPEN):
                     log.critical("Garage door: %s did not open after 10 seconds", self.name)
@@ -185,7 +186,7 @@ class AdemcoGarageDoor(AdemcoEntity, CoverEntity):
         async with self._operation_lock:
             if self._zone.opened:
                 self._status = CoverState.CLOSING
-                self.schedule_update_ha_state()
+                self.async_write_ha_state()
                 await self.toggleRelay()
                 if not await self._wait_for_status(CoverState.CLOSED):
                     log.critical("Garage door: %s did not close after 10 seconds", self.name)

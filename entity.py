@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 
@@ -38,7 +39,7 @@ class AdemcoEntity(Entity):
     async def async_added_to_hass(self) -> None:
         """Register for panel availability updates."""
         self._remove_panel_callback = self._panel.registerCallback(
-            self.schedule_update_ha_state
+            self._handle_panel_update
         )
 
     async def async_will_remove_from_hass(self) -> None:
@@ -46,3 +47,8 @@ class AdemcoEntity(Entity):
         if self._remove_panel_callback is not None:
             self._remove_panel_callback()
             self._remove_panel_callback = None
+
+    @callback
+    def _handle_panel_update(self) -> None:
+        """Write state after a panel-level update."""
+        self.async_write_ha_state()
