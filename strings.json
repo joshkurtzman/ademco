@@ -1,0 +1,57 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "Device is already configured"
+    },
+    "error": {
+      "invalid_config": "The configuration data is invalid",
+      "invalid_json": "Legacy JSON input must be a valid JSON array",
+      "invalid_mapping": "Use one mapping per line in the documented format"
+    },
+    "step": {
+      "garage_doors": {
+        "title": "Garage doors",
+        "description": "Enter one garage door per line as zone:name:output. Example: 25:West:1",
+        "data": {
+          "garagedoors": "Garage doors"
+        }
+      },
+      "partitions": {
+        "title": "Partitions",
+        "description": "Optional. Enter one controllable partition per line as partition:userNumber[:name]. Example: 1:02:Exterior. The panel guide's arm/disarm command uses a user number plus the code entered in Home Assistant.",
+        "data": {
+          "partitions": "Controllable partitions"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Ademco panel",
+        "description": "Update the serial connection used for the panel.",
+        "data": {
+          "name": "Panel name",
+          "device": "Device",
+          "baud": "Baud rate"
+        }
+      },
+      "user": {
+        "title": "Ademco panel",
+        "description": "Set the serial device path and baud rate for the panel connection.",
+        "data": {
+          "name": "Panel name",
+          "device": "Device",
+          "baud": "Baud rate"
+        }
+      },
+      "zones": {
+        "title": "Zones",
+        "description": "Enter one mapping per line as id:name or id:name:latchSeconds. Example: 17:Front or 17:Front:30",
+        "data": {
+          "doors": "Doors",
+          "windows": "Windows",
+          "motions": "Motions",
+          "problems": "Problems"
+        }
+      }
+    }
+  },
+  "title": "Ademco RS232 Alarm Panel"
+}

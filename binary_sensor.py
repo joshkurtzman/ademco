@@ -1,110 +1,250 @@
-import homeassistant
-from homeassistant.components.binary_sensor import BinarySensorEntity
-from .ademco import Zone, Output
-import logging
-import asyncio
+"""Binary sensor platform for Ademco zones."""
 
-log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
-from homeassistant.core import HomeAssistant
-from .const import DOMAIN
-from homeassistant.helpers.typing import (
-    ConfigType,
-    DiscoveryInfoType,
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import voluptuous as vol
+
+from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
+    BinarySensorEntity,
 )
-from typing import Callable, Optional, Sequence
+from homeassistant.core import callback
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.entity_platform import (
+    AddEntitiesCallback,
+    async_get_current_platform,
+)
 
-log.debug("ademco LOADING BINARY SENSOR")
+from . import AdemcoConfigEntry
+from .bypass import build_partition_configs, supports_bypass, validate_bypass_request
+from .const import (
+    CONF_DOORS,
+    CONF_MOTIONS,
+    CONF_PROBLEMS,
+    CONF_WINDOWS,
+)
+from .entity import AdemcoEntity
+
+if TYPE_CHECKING:
+    from .ademco import Zone
 
 
-def setup_platform(
+async def async_setup_entry(
     hass: HomeAssistant,
-    config: ConfigType,
-    async_add_entities: Callable[[Sequence[BinarySensorEntity], bool], None],
-    discovery_info: Optional[DiscoveryInfoType] = None,
+    entry: AdemcoConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
+    """Set up Ademco binary sensors from a config entry."""
     entities = []
-    panel = hass.data[DOMAIN]["panel"]
-    config = hass.data[DOMAIN]["config"]
+    runtime_data = entry.runtime_data
+    panel = runtime_data.panel
+    config = runtime_data.config
+    partition_configs = build_partition_configs(config)
+    platform = async_get_current_platform()
 
-    for x in config.get("doors"):
-        log.debug("ADEMCO" + str(x))
-        entities.append(AdemcoZone(panel.getZone(x["id"]), x, "door"))
+    for zone_config in config.get(CONF_DOORS, []):
+        entities.append(
+            AdemcoZone(
+                panel,
+                runtime_data.device_id,
+                runtime_data.device_name,
+                panel.getZone(zone_config["id"]),
+                zone_config,
+                "door",
+                partition_configs,
+            )
+        )
 
-    for x in config.get("windows"):
-        log.debug("ADEMCO" + str(x))
+    for zone_config in config.get(CONF_WINDOWS, []):
         entities.append(
-            AdemcoZone(panel.getZone(x["id"]), x, "window")
+            AdemcoZone(
+                panel,
+                runtime_data.device_id,
+                runtime_data.device_name,
+                panel.getZone(zone_config["id"]),
+                zone_config,
+                "window",
+                partition_configs,
+            )
         )
-    for x in config.get("motions"):
-        log.debug("ADEMCO" + str(x))
+    for zone_config in config.get(CONF_MOTIONS, []):
         entities.append(
-            AdemcoZone(panel.getZone(x["id"]), x, "motion")
+            AdemcoZone(
+                panel,
+                runtime_data.device_id,
+                runtime_data.device_name,
+                panel.getZone(zone_config["id"]),
+                zone_config,
+                "motion",
+                partition_configs,
+            )
         )
-    for x in config.get("problems"):
-        log.debug("ADEMCO" + str(x))
+    for zone_config in config.get(CONF_PROBLEMS, []):
         entities.append(
-            AdemcoZone(panel.getZone(x["id"]), x, "problem")
+            AdemcoZone(
+                panel,
+                runtime_data.device_id,
+                runtime_data.device_name,
+                panel.getZone(zone_config["id"]),
+                zone_config,
+                "problem",
+                partition_configs,
+            )
         )
 
     async_add_entities(entities)
-    return True
+    platform.async_register_entity_service(
+        "ademco_bypass",
+        {vol.Required("code"): str},
+        "async_bypass_zone",
+    )
+    platform.async_register_entity_service(
+        "ademco_unbypass",
+        {vol.Required("code"): str},
+        "async_unbypass_zone",
+    )
 
 
-class AdemcoZone(BinarySensorEntity):
+class AdemcoZone(AdemcoEntity, BinarySensorEntity):
+    """Representation of an Ademco zone."""
+
+    _attr_should_poll = False
+
     def __init__(
-        self, zone: Zone, config: str, deviceClass: str, output: Output = None
+        self,
+        panel,
+        device_id: str,
+        device_name: str,
+        zone: Zone,
+        config: dict[str, str],
+        device_class: str,
+        partition_configs: dict[int, dict[str, str]],
     ) -> None:
-        super.__init__
+        """Initialize an Ademco zone entity."""
+        super().__init__(panel, device_id, device_name)
         self._zone = zone
         self._config = config
-        self.deviceClass = deviceClass
-        self._zone.registerCallback(self.schedule_update_ha_state)
+        self._zone_type = device_class
+        self._partition_configs = partition_configs
+        self._attr_device_class = BinarySensorDeviceClass(device_class)
+        self._attr_unique_id = f"ademco.zone{self._zone.zoneNum}"
+        self._zone.latchSeconds = int(config.get("latchSeconds", "0") or 0)
+        self._latch_seconds = self._zone.latchSeconds
+        self._latched_on = False
+        self._was_open = self._zone.opened
+        self._remove_latch_timer = None
+        self._remove_zone_callback = None
 
-        if self.deviceClass == "garage_door":
-            if not output:
-                raise Exception("Output is required for garage door")
-            self.output = output
+    async def async_added_to_hass(self) -> None:
+        """Register zone update callbacks when enabled."""
+        await super().async_added_to_hass()
+        self._remove_zone_callback = self._zone.registerCallback(self._handle_zone_update)
 
-    @property
-    def should_poll(self):
-        return False
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister callbacks."""
+        self._cancel_latch_timer()
+        if self._remove_zone_callback is not None:
+            self._remove_zone_callback()
+            self._remove_zone_callback = None
+        await super().async_will_remove_from_hass()
 
-    @property
-    def identifiers(self):
-        return (DOMAIN, self.unique_id)
+    def _cancel_latch_timer(self) -> None:
+        """Cancel any pending latch clear timer."""
+        if self._remove_latch_timer is not None:
+            self._remove_latch_timer()
+            self._remove_latch_timer = None
 
+    @callback
+    def _clear_latch(self, _now=None) -> None:
+        """Clear the temporary latched-on state."""
+        self._remove_latch_timer = None
+        if not self._zone.opened and self._latched_on:
+            self._latched_on = False
+            self.async_write_ha_state()
 
-    @property
-    def unique_id(self):
-        return "{}.zone{}".format(DOMAIN,self._zone.zoneNum)
+    @callback
+    def _handle_zone_update(self) -> None:
+        """Write state after a zone update."""
+        is_open = self._zone.opened
+        if is_open:
+            self._cancel_latch_timer()
+            self._latched_on = False
+        elif self._was_open and self._latch_seconds > 0:
+            self._latched_on = True
+            self._cancel_latch_timer()
+            self._remove_latch_timer = async_call_later(
+                self.hass,
+                self._latch_seconds,
+                self._clear_latch,
+            )
 
-    def nameSuffix(self) -> str:
-        map = {
-            "door": " Door",
-            "window": " Window",
-            "garage_door": " Garage Door",
-            "motion": " Motion",
-            "problem": " Problem",
-        }
-        return map.get(self.deviceClass, "")
-    
+        self._was_open = is_open
+        self.async_write_ha_state()
+
     @property
     def extra_state_attributes(self):
-        return {
-                "bypassed":self._zone.bypassed, 
-                "alarm":self._zone.alarm, 
-                "trouble":self._zone.trouble }
+        """Return extra state attributes for the zone."""
+        attributes = {
+            "bypassed": self._zone.bypassed,
+            "alarm": self._zone.alarm,
+            "trouble": self._zone.trouble,
+            "partition_id": self._zone.partition_id,
+            "controllable_bypass": self._supports_bypass,
+        }
+        if self._latch_seconds > 0:
+            attributes["latched"] = self._latched_on
+            attributes["latchSeconds"] = self._latch_seconds
+        return attributes
 
     @property
     def name(self):
-        return "{} {}".format(self._config.get("name"), self.nameSuffix())
+        """Return the legacy-compatible zone name."""
+        suffix = {
+            "door": "Door",
+            "window": "Window",
+            "motion": "Motion",
+            "problem": "Problem",
+        }[self._zone_type]
+        zone_name = self._config.get("name", "").strip()
+        if not zone_name:
+            return f"Zone {self._zone.zoneNum} {suffix}"
+        return f"{zone_name} {suffix}"
 
     @property
     def is_on(self) -> bool:
-        return self._zone.opened
+        """Return if the zone is currently active/open."""
+        return self._zone.opened or self._latched_on
 
     @property
-    def device_class(self):
-        """Return the device class."""
-        return self.deviceClass
+    def _supports_bypass(self) -> bool:
+        return supports_bypass(
+            self._zone_type,
+            self._zone.partition_id,
+            self._partition_configs,
+        )
+
+    async def async_bypass_zone(self, code: str) -> None:
+        """Bypass this zone using the partition's configured user number."""
+        validate_bypass_request(
+            self.name,
+            self._zone_type,
+            self._zone.partition_id,
+            self._partition_configs,
+        )
+        self._panel.bypassZone(self._zone.partition_id, code, self._zone.zoneNum)
+
+    async def async_unbypass_zone(self, code: str) -> None:
+        """Unbypass this zone using the same Ademco keypad toggle sequence."""
+        validate_bypass_request(
+            self.name,
+            self._zone_type,
+            self._zone.partition_id,
+            self._partition_configs,
+        )
+        if not self._zone.bypassed:
+            raise HomeAssistantError(f"{self.name} is not currently bypassed")
+        self._panel.bypassZone(self._zone.partition_id, code, self._zone.zoneNum)

@@ -1,106 +1,112 @@
 """The Ademco RS232 Alarm Panel integration."""
+
 from __future__ import annotations
-from homeassistant.components.http import CONFIG_SCHEMA
 
-# from homeassistant.helpers.config_validation import PLATFORM_SCHEMA
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from homeassistant.helpers.discovery import load_platform, async_load_platform
-from homeassistant.helpers.entity_component import async_update_entity
-
-# from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-import voluptuous as vol
-from homeassistant.helpers import config_validation as cv, device_registry as dr
+from homeassistant.helpers import device_registry as dr
 
+from .const import (
+    CONF_DEVICE,
+    CONF_NAME,
+    DEFAULT_NAME,
+    DOMAIN,
+    PLATFORMS,
+)
 
-
-from .const import DOMAIN
-import asyncio
-from .ademco import AlarmPanel, Zone, Output
-
-PLATFORMS = ["binary_sensor"]  # ,"alarm_control_panel", "switch"]
 import logging
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
+
+if TYPE_CHECKING:
+    from .ademco import AlarmPanel
 
 
-ZONE_CONFIG = vol.Schema(
-    {vol.Required("id"): cv.string, 
-     vol.Required("name"): cv.string}
-)
-GARAGE_CONFIG = vol.Schema(
-    {
-        vol.Required("id"): cv.string,
-        vol.Required("name"): cv.string,
-        vol.Required("output"): cv.string,
-    }
-)
-CONFIG_SCHEMA = CONFIG_SCHEMA.extend(
-    {
-        vol.Required(DOMAIN): {
-            vol.Optional("device"): cv.string,
-            vol.Required("baud", default=1200): cv.string,
-            vol.Optional("motions"): vol.All(cv.ensure_list, [ZONE_CONFIG]),
-            vol.Optional("doors"): vol.All(cv.ensure_list, [ZONE_CONFIG]),
-            vol.Optional("windows"): vol.All(cv.ensure_list, [ZONE_CONFIG]),
-            vol.Optional("garagedoors"): vol.All(cv.ensure_list, [GARAGE_CONFIG]),
-        }
-    }
-)
+@dataclass
+class AdemcoRuntimeData:
+    """Runtime data stored on the config entry."""
+
+    panel: "AlarmPanel"
+    config: dict
+    device_id: str
+    device_name: str
 
 
-async def async_setup(hass: HomeAssistant, config):
-    c = config["ademco"]
-    # hass.states.async_set("ademco", "Paulus")
-    # log.debug(str(config))
-    panel = AlarmPanel(c, loop=hass.loop)
-    hass.data[DOMAIN] = {"panel": panel, "config": c}
-
-    log.debug("Zones" + str(panel.zones))
-    log.debug("AdemcoConfig:" + str(c))
+type AdemcoConfigEntry = ConfigEntry[AdemcoRuntimeData]
 
 
-    hass.async_create_task(async_load_platform(hass, "binary_sensor", DOMAIN, {}, c))
-    hass.async_create_task(async_load_platform(hass, "cover", DOMAIN, {}, c))
-    # hass.data[DOMAIN] = {}
-
-    # for door in config['garagedoor']:
-    #    sensors.append(AdemcoZone(panel.get(door['id']), door['name'], "garage_door"))
-
-    # hass.add_entities(entities)
-
-    # for zone in panel.zones:
-    # print(zone.zoneNum)
-    # hass.states.async_set("ademco.zone"+str(zone.zoneNum), zone.opened, attributes={"trouble": zone.trouble, "alarm": zone.alarm, "bypassed": zone.bypassed})
-
-    # Return boolean to indicate that initialization was successful.
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Set up the integration."""
+    if DOMAIN in config:
+        log.warning(
+            "The '%s:' YAML configuration block is no longer used. "
+            "Manage Ademco from Settings -> Devices & services and remove the "
+            "YAML block from configuration.yaml.",
+            DOMAIN,
+        )
     return True
 
 
+async def async_setup_entry(hass: HomeAssistant, entry: AdemcoConfigEntry) -> bool:
+    """Set up Ademco from a config entry."""
+    from .ademco import AlarmPanel
 
-# TODO UNLOAD module to disconnect serial to prevent error on reconnect
+    config = dict(entry.data)
+    panel_name = str(config.get(CONF_NAME, "")).strip()
+    if not panel_name:
+        panel_name = (
+            entry.title
+            if entry.title and entry.title != config.get(CONF_DEVICE)
+            else DEFAULT_NAME
+        )
+        config[CONF_NAME] = panel_name
+        hass.config_entries.async_update_entry(entry, data=config, title=panel_name)
+    elif entry.title != panel_name:
+        hass.config_entries.async_update_entry(entry, title=panel_name)
+
+    panel = AlarmPanel(
+        config,
+        loop=hass.loop,
+        create_task=lambda coro, name: entry.async_create_background_task(
+            hass, coro, f"{DOMAIN}_{name}"
+        ),
+    )
+
+    device_id = config.get(CONF_DEVICE) or entry.entry_id
+    device_name = panel_name
+
+    device_registry = dr.async_get(hass)
+    if device := device_registry.async_get_device(identifiers={(DOMAIN, device_id)}):
+        if device.name_by_user is None and device.name != device_name:
+            device_registry.async_update_device(device.id, name=device_name)
+
+    entry.runtime_data = AdemcoRuntimeData(
+        panel=panel,
+        config=config,
+        device_id=device_id,
+        device_name=device_name,
+    )
+
+    try:
+        await panel.async_start()
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception:
+        await panel.async_stop()
+        raise
+
+    log.debug(
+        "Configured Ademco panel on %s",
+        config.get(CONF_DEVICE),
+    )
+
+    return True
 
 
-# async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-#     """Set up Ademco RS232 Alarm Panel from a config entry."""
-#     # Store an API object for your platforms to access
-#     hass.data[DOMAIN]
-
-
-#     hass.config_entries.async_setup_platforms(entry, PLATFORMS)
-
-#     return True
-
-
-# async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-#     """Unload a config entry."""
-#     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-#     hass.data[DOMAIN].writer.close()
-#     hass.data[DOMAIN].reader.close()
-#     #await hass.data[DOMAIN].writer.wait_closed()
-#     #await hass.data[DOMAIN].reader.wait_closed()
-#     if unload_ok:
-#         hass.data[DOMAIN].pop(entry.entry_id)
-
-#     return unload_ok
+async def async_unload_entry(hass: HomeAssistant, entry: AdemcoConfigEntry) -> bool:
+    """Unload an Ademco config entry."""
+    if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        await entry.runtime_data.panel.async_stop()
+    return unload_ok

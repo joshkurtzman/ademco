@@ -1,120 +1,150 @@
-import homeassistant
-from homeassistant.components.cover import CoverEntity, DEVICE_CLASS_GARAGE, SUPPORT_OPEN, SUPPORT_CLOSE, STATE_CLOSED, STATE_CLOSING, STATE_OPEN, STATE_OPENING
-from .ademco import Zone, Output
-import logging
+"""Cover platform for Ademco garage door outputs."""
+
+from __future__ import annotations
+
 import asyncio
+import logging
+from typing import TYPE_CHECKING
+
+from homeassistant.components.cover import (
+    CoverDeviceClass,
+    CoverEntity,
+    CoverEntityFeature,
+    CoverState,
+)
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from . import AdemcoConfigEntry
+from .const import CONF_GARAGE_DOORS
+from .entity import AdemcoEntity
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
-from homeassistant.core import HomeAssistant
-from .const import DOMAIN
-from homeassistant.helpers.typing import (
-    ConfigType,
-    DiscoveryInfoType,
-    HomeAssistantType,
-)
-from typing import Callable, Optional, Sequence
 
-log.debug("ademco loading output relays")
+if TYPE_CHECKING:
+    from .ademco import Output, Zone
 
 
-def setup_platform(
-    hass: HomeAssistantType,
-    config: ConfigType,
-    async_add_entities: Callable[[Sequence[CoverEntity], bool], None],
-    discovery_info: Optional[DiscoveryInfoType] = None,
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: AdemcoConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-
+    """Set up Ademco garage door covers from a config entry."""
     entities = []
-    panel = hass.data[DOMAIN]["panel"]
-    config = hass.data[DOMAIN]["config"]
+    runtime_data = entry.runtime_data
+    panel = runtime_data.panel
+    config = runtime_data.config
 
-    for x in config.get("garagedoors"):
-        log.debug("ADEMCO" + str(x))
+    for garage_config in config.get(CONF_GARAGE_DOORS, []):
         entities.append(
             AdemcoGarageDoor(
-                panel.getZone(x["id"]),
-                panel.getOutput(x["output"]),
-                x
+                panel,
+                runtime_data.device_id,
+                runtime_data.device_name,
+                panel.getZone(garage_config["id"]),
+                panel.getOutput(garage_config["output"]),
+                garage_config,
             )
         )
 
     async_add_entities(entities)
-    return True
 
 
-class AdemcoGarageDoor(CoverEntity):
+class AdemcoGarageDoor(AdemcoEntity, CoverEntity):
+    """Representation of an Ademco garage door cover."""
+
+    _attr_should_poll = False
+    _attr_device_class = CoverDeviceClass.GARAGE
+    _attr_supported_features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE
+
     def __init__(
-        self, zone: Zone, output: Output, config: str) -> None:
-        super.__init__
+        self,
+        panel,
+        device_id: str,
+        device_name: str,
+        zone: Zone,
+        output: Output,
+        config: dict[str, str],
+    ) -> None:
+        """Initialize an Ademco garage door."""
+        super().__init__(panel, device_id, device_name)
         self._zone = zone
         self._output = output
         self._config = config
-        self._status = STATE_OPEN if zone.opened  else STATE_CLOSED
-        self._zone.registerCallback(self._updateStatus)
-    @property
-    def should_poll(self):
-        return False
-        
-    @property
-    def identifiers(self):
-        return (DOMAIN, self.unique_id)
+        self._status = CoverState.OPEN if zone.opened else CoverState.CLOSED
+        self._attr_unique_id = f"ademco.zone{self._zone.zoneNum}"
+        self._remove_zone_callback = None
+        self._operation_lock = asyncio.Lock()
+
+    async def async_added_to_hass(self) -> None:
+        """Register zone updates when the entity is added."""
+        await super().async_added_to_hass()
+        self._remove_zone_callback = self._zone.registerCallback(self._update_status)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister callbacks."""
+        if self._remove_zone_callback is not None:
+            self._remove_zone_callback()
+            self._remove_zone_callback = None
+        await super().async_will_remove_from_hass()
 
     @property
-    def unique_id(self):
-        return "{}.zone{}".format(DOMAIN,self._zone.zoneNum)
-    
-    @property
     def extra_state_attributes(self):
+        """Return extra state attributes."""
         return {
-                "bypassed":self._zone.bypassed, 
-                "alarm":self._zone.alarm, 
-                "trouble":self._zone.trouble }
+            "bypassed": self._zone.bypassed,
+            "alarm": self._zone.alarm,
+            "trouble": self._zone.trouble,
+            "partition_id": self._zone.partition_id,
+        }
 
     @property
     def name(self):
-        return "{} Garage Door".format(self._config.get("name"))
-
-    @property
-    def is_on(self) -> bool:
-        return self._zone.opened
-
-    @property
-    def device_class(self):
-        return DEVICE_CLASS_GARAGE
-
-    @property
-    def supported_features(self) -> int:
-        return SUPPORT_OPEN | SUPPORT_CLOSE
+        """Return the legacy-compatible garage door name."""
+        door_name = self._config.get("name", "").strip()
+        if not door_name:
+            return f"Zone {self._zone.zoneNum} Garage Door"
+        return f"{door_name} Garage Door"
 
     @property
     def current_cover_position(self):
+        """Return 100 when open and 0 when closed."""
         if self._zone.opened:
             return 100
         return 0
 
     @property
     def is_opening(self):
-        if self._status == STATE_OPENING:
+        if self._status == CoverState.OPENING:
             return True
         return False
 
     @property
     def is_closing(self):
-        if self._status == STATE_CLOSING:
+        if self._status == CoverState.CLOSING:
             return True
         return False
-    
+
     @property
     def is_closed(self):
         return self._zone.closed
 
-    def _updateStatus(self):
+    @callback
+    def _update_status(self):
         if self._zone.opened:
-            self._status = STATE_OPEN
+            self._status = CoverState.OPEN
         else:
-            self._status = STATE_CLOSED
-        self.schedule_update_ha_state()
+            self._status = CoverState.CLOSED
+        self.async_write_ha_state()
+
+    async def _wait_for_status(self, target: CoverState, timeout: int = 10) -> bool:
+        """Wait for the zone callback to report the requested cover state."""
+        for _ in range(timeout):
+            await asyncio.sleep(1)
+            if self._status == target:
+                return True
+        return False
 
     async def toggleRelay(self):
         self._output.turnOn()
@@ -122,38 +152,49 @@ class AdemcoGarageDoor(CoverEntity):
         self._output.turnOff()
 
     async def async_open_cover(self, **kwargs):
-        if self._status == STATE_CLOSED:
-            self._status = STATE_OPENING
-            self.schedule_update_ha_state()
-            await self.toggleRelay()
-            for i in range(0,10):
-                await asyncio.sleep(1)
-                if self._status == STATE_OPEN:
-                    break
-            log.critical("Garage door: {} did not open after 10 seconds".format(self.name))
-            self._updateStatus()
+        if not self._panel.available:
+            log.warning("Could not open %s - panel is unavailable", self.name)
+            return
 
-        else:
-            log.info("Could not open {} - State is {}".format(self.name, self._status))
+        if self._operation_lock.locked():
+            log.info("Ignoring open request for %s - operation already in progress", self.name)
+            return
 
-            
+        async with self._operation_lock:
+            if self._zone.closed:
+                self._status = CoverState.OPENING
+                self.async_write_ha_state()
+                await self.toggleRelay()
+                if not await self._wait_for_status(CoverState.OPEN):
+                    log.critical("Garage door: %s did not open after 10 seconds", self.name)
+                    self._update_status()
+            else:
+                log.info(
+                    "Could not open %s - zone already reports open (status=%s)",
+                    self.name,
+                    self._status,
+                )
+
     async def async_close_cover(self, **kwargs):
-        if self._status == STATE_OPEN:
-            self._status = STATE_CLOSING
-            self.schedule_update_ha_state()
-            await self.toggleRelay()
-            for i in range(0,10):
-                await asyncio.sleep(1)
-                if self._status == STATE_CLOSED:
-                    break
-            log.critical("Garage door: {} did not close after 10 seconds".format(self.name))
-            self._updateStatus()
+        if not self._panel.available:
+            log.warning("Could not close %s - panel is unavailable", self.name)
+            return
 
-        else:
-            log.info("Could not close {} - State is {}".format(self.name, self._status))
+        if self._operation_lock.locked():
+            log.info("Ignoring close request for %s - operation already in progress", self.name)
+            return
 
-            
-
-    # @property
-    # def assumed_state(self) -> bool:
-    #     return self._zone._alarmPanel.is_initialized
+        async with self._operation_lock:
+            if self._zone.opened:
+                self._status = CoverState.CLOSING
+                self.async_write_ha_state()
+                await self.toggleRelay()
+                if not await self._wait_for_status(CoverState.CLOSED):
+                    log.critical("Garage door: %s did not close after 10 seconds", self.name)
+                    self._update_status()
+            else:
+                log.info(
+                    "Could not close %s - zone already reports closed (status=%s)",
+                    self.name,
+                    self._status,
+                )

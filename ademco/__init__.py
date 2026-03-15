@@ -1,27 +1,16 @@
+from __future__ import annotations
+
 from asyncio.streams import StreamReader, StreamWriter
-from asyncio.transports import Transport
-from typing import Dict, List
+from collections.abc import Callable
 import asyncio
-import serial_asyncio
-from serial import SerialException
 from asyncio import CancelledError
+from contextlib import suppress
 import logging
-import sys
-import datetime
-import traceback
+from typing import Any, Dict, List
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
 
 REFRESH_INTERVAL = 3600
-
-
-class AdemcoError(Exception):
-    def __init__(self, panelClass: "AlarmPanel"):
-        # TODO LOG trace and status of module
-        # traceback.print_exception(*exc_info)
-        log.critical("AdemcoError - Restarting")
-        panelClass.loop.create_task(panelClass.restart())
 
 
 def twos_comp(val, bits):
@@ -41,7 +30,13 @@ def checksum(s: str) -> str:
 
 
 class AlarmPanel:
-    def __init__(self, config: dict, loop=asyncio.get_event_loop()) -> None:
+    def __init__(
+        self,
+        config: dict,
+        loop: asyncio.AbstractEventLoop | None = None,
+        create_task: Callable[[Any, str], asyncio.Task] | None = None,
+    ) -> None:
+        self.loop = loop or asyncio.get_running_loop()
         self.SERIAL_PORT = config.get("device", "/dev/ttyUSB0")
         self.BAUD_RATE = config.get("baud", "1200")
 
@@ -51,34 +46,155 @@ class AlarmPanel:
             self._zones[z] = Zone(self, z)
 
         self._outputs: Dict[int, Output] = {}
-        for o in range(1, 9):
+        for o in range(1, 97):
             self._outputs[o] = Output(self, o)
 
         self._partitions: Dict[int, Partition] = {}
         self._partitionReport = None
-        self.loop = loop
-        self.reader: StreamReader = None
-        self.writer: StreamWriter = None
-        self.writeQueue = asyncio.Queue()
+        self.reader: StreamReader | None = None
+        self.writer: StreamWriter | None = None
+        self.writeQueue: asyncio.Queue[bytes] = asyncio.Queue()
         self.is_initialized = False
+        self.connected = False
+        self._callbacks: list[Callable[[], None]] = []
+        self._main_task: asyncio.Task | None = None
+        self._listen_task: asyncio.Task | None = None
+        self._refresh_task: asyncio.Task | None = None
+        self._write_task: asyncio.Task | None = None
+        self._restart_task: asyncio.Task | None = None
+        self._connect_lock = asyncio.Lock()
+        self._stopped = False
+        self._create_task = create_task
 
-        log.debug("Initializing Main")
-        loop.create_task(self.main())
+        log.debug("Initializing Ademco panel")
+
+    @property
+    def available(self) -> bool:
+        return self.connected and self.is_initialized
+
+    def registerCallback(self, cb):
+        self._callbacks.append(cb)
+
+        def _remove_callback() -> None:
+            if cb in self._callbacks:
+                self._callbacks.remove(cb)
+
+        return _remove_callback
+
+    def _notify_callbacks(self) -> None:
+        for cb in list(self._callbacks):
+            try:
+                cb()
+            except Exception:
+                log.exception("Ademco callback raised unexpectedly")
+
+    def _set_connected(self, connected: bool) -> None:
+        if self.connected != connected:
+            self.connected = connected
+            self._notify_callbacks()
+
+    def _set_initialized(self, initialized: bool) -> None:
+        if self.is_initialized != initialized:
+            self.is_initialized = initialized
+            self._notify_callbacks()
+
+    def _handle_disconnect(self) -> None:
+        self.reader = None
+        if self.writer is not None:
+            self.writer.close()
+        self.writer = None
+        self._set_connected(False)
+        self._set_initialized(False)
+
+    def _create_background_task(self, coro: Any, name: str) -> asyncio.Task:
+        """Create a background task for panel runtime work."""
+        if self._create_task is not None:
+            return self._create_task(coro, name)
+        return self.loop.create_task(coro)
+
+    async def async_start(self) -> None:
+        if self._main_task is not None and not self._main_task.done():
+            return
+
+        self._stopped = False
+        self.writeQueue = asyncio.Queue()
+        self._main_task = self._create_background_task(self.main(), "main")
+
+    async def async_stop(self) -> None:
+        self._stopped = True
+        current_task = asyncio.current_task()
+        tasks = [
+            self._main_task,
+            self._listen_task,
+            self._refresh_task,
+            self._write_task,
+            self._restart_task,
+        ]
+        pending = []
+        for task in tasks:
+            if task is not None and task is not current_task and not task.done():
+                task.cancel()
+                pending.append(task)
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        if self.writer is not None:
+            self.writer.close()
+            wait_closed = getattr(self.writer, "wait_closed", None)
+            if callable(wait_closed):
+                with suppress(Exception):
+                    await wait_closed()
+        self.reader = None
+        self.writer = None
+        self.writeQueue = asyncio.Queue()
+        if self._main_task is not current_task:
+            self._main_task = None
+        if self._listen_task is not current_task:
+            self._listen_task = None
+        if self._refresh_task is not current_task:
+            self._refresh_task = None
+        if self._write_task is not current_task:
+            self._write_task = None
+        if self._restart_task is not current_task:
+            self._restart_task = None
+        self._set_connected(False)
+        self._set_initialized(False)
+
+    def request_restart(self) -> None:
+        """Queue a restart from an exception path without duplicating tasks."""
+        if self._stopped:
+            return
+        if self._restart_task is None or self._restart_task.done():
+            self._restart_task = self._create_background_task(self.restart(), "restart")
 
     async def restart(self):
         # reset everything on errrors
-        self.reader = None
-        self.writer = None
-        self.is_initialized = False
-        self.writeQueue = None
-        self.loop.create_task(self.main())
+        try:
+            should_restart = not self._stopped
+            await self.async_stop()
+            if should_restart:
+                await self.async_start()
+        finally:
+            if self._restart_task is asyncio.current_task():
+                self._restart_task = None
+
+    async def _open_serial_connection(self) -> tuple[StreamReader, StreamWriter]:
+        """Open the Ademco serial transport lazily to avoid import-time overhead."""
+        import serial_asyncio
+
+        return await serial_asyncio.open_serial_connection(
+            url=self.SERIAL_PORT,
+            baudrate=self.BAUD_RATE,
+        )
 
     async def main(self):
-
-        FirstLoop = True
-        self.loop.create_task(self.monitorWriteQueue())
-        self.loop.create_task(self.listen())
-        while True:
+        self._write_task = self._create_background_task(
+            self.monitorWriteQueue(), "write_queue"
+        )
+        self._listen_task = self._create_background_task(self.listen(), "listen")
+        self._refresh_task = self._create_background_task(
+            self.refreshStatus(), "refresh_status"
+        )
+        while not self._stopped:
             if not self.reader or not self.writer:
                 if not self.SERIAL_PORT:
                     log.info("No serial port configured")
@@ -90,41 +206,47 @@ class AlarmPanel:
                         self.SERIAL_PORT, self.BAUD_RATE
                     )
                 )
+                if self.reader or self.writer or self._stopped:
+                    await asyncio.sleep(1)
+                    continue
                 try:
-                    (
-                        self.reader,
-                        self.writer,
-                    ) = await serial_asyncio.open_serial_connection(
-                        url=self.SERIAL_PORT, baudrate=self.BAUD_RATE
-                    )
-                    self.writer.write(b"\r\n")
-                # except (SerialException, OSError, FileNotFoundError):
-                except:
+                    async with self._connect_lock:
+                        if self.reader or self.writer or self._stopped:
+                            continue
+
+                        (
+                            self.reader,
+                            self.writer,
+                        ) = await self._open_serial_connection()
+                        self.writer.write(b"\r\n")
+                except Exception:
+                    self._handle_disconnect()
                     log.exception("Caught Serial Exception")
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(5)
+                    continue
+                except CancelledError:
                     break
 
                 log.debug("Ademco Connected")
-            if FirstLoop:
-                self.loop.create_task(self.refreshStatus())
-                FirstLoop = False
+                self._set_connected(True)
             await asyncio.sleep(60)
 
     async def refreshStatus(self):
-        while True:
-
+        while not self._stopped:
             self.zoneStatusRequest()
             await asyncio.sleep(3)
             #sometimes first attempt doesn't work.
-            while not self.is_initialized:
+            while not self.is_initialized and not self._stopped:
                 self.zoneStatusRequest()
                 await asyncio.sleep(5)
             self.outputStatusRequest()
             await asyncio.sleep(2)
-            self.zonePartitionRequest()
+            self.armingStatusRequest()
+            await asyncio.sleep(2)
+            if self._partitionReport is None:
+                self.zonePartitionRequest()
 
             # await asyncio.sleep(2)
-            # self.armingStatusRequest()
             # TODO check that data has been received
 
             await asyncio.sleep(REFRESH_INTERVAL)
@@ -133,33 +255,51 @@ class AlarmPanel:
     def zones(self) -> List["Zone"]:
         return [i for i in self._zones.values()]
 
+    @property
+    def partitions(self) -> List["Partition"]:
+        return [i for i in self._partitions.values()]
+
+    @property
+    def active_partition_ids(self) -> List[int]:
+        if not self._partitionReport:
+            return []
+        return sorted({int(partition_id) for partition_id in self._partitionReport if partition_id != "0"})
+
     def getZone(self, zoneId: int) -> "Zone":
         return self._zones.get(int(zoneId))
 
     def getOutput(self, id: int) -> "output":
         return self._outputs.get(int(id))
 
+    def getPartition(self, partition_id: int) -> "Partition | None":
+        return self._partitions.get(int(partition_id))
+
     async def listen(self):
-        while True:
+        while not self._stopped:
             if self.reader:
                 try:
                     line = await self.reader.readline()
                     self.handleMessage(line)
                 except CancelledError:
                     break
-                except:
-                    # traceback.print_exception(*exc_info)
+                except Exception:
+                    self._handle_disconnect()
                     log.exception("Listen function threw exception")
-                    await asyncio.sleep(2)
+                    self.request_restart()
+                    break
             else:
                 await asyncio.sleep(1)
 
     def sendCommand(self, command: str):
+        if self._stopped or self.writer is None:
+            log.debug("Dropping Ademco command while disconnected: %s", command)
+            return
+
         message = bytes(command + checksum(command), "utf-8") + b"\r\n"
         self.writeQueue.put_nowait(message)
 
     async def monitorWriteQueue(self):
-        while True:
+        while not self._stopped:
             if self.writer:
                 try:
                     i = await self.writeQueue.get()
@@ -169,19 +309,86 @@ class AlarmPanel:
                     await asyncio.sleep(1)
                 except CancelledError:
                     break
-                except:
+                except Exception:
                     log.exception("Unexpected error in monitorWriteQueue:")
+                    self._handle_disconnect()
+                    self.request_restart()
+                    break
             else:
                 await asyncio.sleep(2)
 
-    def armAway(self, userCode):
-        self.sendCommand(" ")
+    def _build_partition_control_command(
+        self, command: str, user_number: int | str, user_code: str
+    ) -> str:
+        user_number_str = str(user_number).strip()
+        user_code_str = str(user_code).strip()
 
-    def armHome(self, userCode):
-        self.sendCommand(" ")
+        if not user_number_str.isdigit():
+            raise ValueError("User number must be numeric")
+        if not user_code_str.isdigit():
+            raise ValueError("User code must be numeric")
 
-    def disam(self, userCode):
-        self.sendCommand(" ")
+        if len(user_number_str) > 2:
+            raise ValueError("User number must be 1 or 2 digits")
+        if len(user_code_str) != 4:
+            raise ValueError("User code must be exactly 4 digits")
+
+        payload = f"{int(user_number_str):02d}{user_code_str}00"
+        return f"0E{command}{payload}"
+
+    def _build_keypad_command(self, partition_id: int | str, keys: str) -> str:
+        partition_str = str(partition_id).strip()
+        keys_str = str(keys).strip()
+
+        if not partition_str.isdigit():
+            raise ValueError("Partition must be numeric")
+        if len(partition_str) != 1:
+            raise ValueError("Partition must be a single digit")
+        if not keys_str or len(keys_str) > 5:
+            raise ValueError("Keypad command must be 1 to 5 keystrokes")
+        if not keys_str.isdigit():
+            raise ValueError("Keypad command must be numeric")
+
+        body = f"ks{partition_str}{keys_str}00"
+        length = len(body) + 4
+        return f"{length:02X}{body}"
+
+    def armAway(self, user_number: int | str, user_code: str) -> None:
+        self.sendCommand(
+            self._build_partition_control_command("aa", user_number, user_code)
+        )
+
+    def armHome(self, user_number: int | str, user_code: str) -> None:
+        self.sendCommand(
+            self._build_partition_control_command("ah", user_number, user_code)
+        )
+
+    def disam(self, user_number: int | str, user_code: str) -> None:
+        self.sendCommand(
+            self._build_partition_control_command("ad", user_number, user_code)
+        )
+
+    def sendKeypad(self, partition_id: int | str, keys: str) -> None:
+        self.sendCommand(self._build_keypad_command(partition_id, keys))
+
+    def bypassZone(
+        self,
+        partition_id: int | str,
+        user_code: str,
+        zone_number: int | str,
+    ) -> None:
+        zone_str = str(zone_number).strip()
+        code_str = str(user_code).strip()
+
+        if not zone_str.isdigit():
+            raise ValueError("Zone number must be numeric")
+        if len(code_str) != 4 or not code_str.isdigit():
+            raise ValueError("User code must be exactly 4 digits")
+
+        # Emulate keypad entry: [code][6] then [zone], which is how single-zone
+        # bypass is exposed on VISTA keypads.
+        self.sendKeypad(partition_id, f"{code_str}6")
+        self.sendKeypad(partition_id, f"{int(zone_str):03d}")
 
     def armingStatusRequest(self):
         self.sendCommand("08as00")
@@ -199,7 +406,11 @@ class AlarmPanel:
         message = message.lstrip(
             b"P"
         )  # Remove Ps that occasionally get sent without newlines
-        message = message.decode("ASCII")
+        try:
+            message = message.decode("ASCII")
+        except UnicodeDecodeError:
+            log.warning("Ignoring undecodable Ademco payload: %r", message)
+            return
         message = message.rstrip("\r\n")
         if not message:  # If the P was received without new line skip it silently
             return
@@ -236,24 +447,37 @@ class AlarmPanel:
 
     def processZoneStatusReport(self, data):
         for z, s in enumerate(data):
-            self._zones[z+1].proccessStatus(int(s))
-            self.is_initialized = True
+            self._zones[z + 1].proccessStatus(int(s))
+        self._set_initialized(True)
 
     def processArmingStatusReport(self, data):
-        print("ArmingStatus:" + data)
+        changed = False
         for p, s in enumerate(data):
-            if not p in self._partitions.keys():
-                self._partitions[p+1] = Partition(self, int(p+1), int(s))
+            partition_id = p + 1
+            partition = self._partitions.get(partition_id)
+            if partition is None:
+                self._partitions[partition_id] = Partition(self, partition_id, s)
+                changed = True
+            else:
+                changed = partition.proccessStatus(s) or changed
+        if changed:
+            self._notify_callbacks()
 
     def processZonePartionReport(self, data):
-        self._partitionReport = data
+        if data != self._partitionReport:
+            self._partitionReport = data
+            self._notify_callbacks()
 
     def processOutputStatusReport(self, data):
         for o, s in enumerate(data):
             if s == "U":
                 continue
-            if not o + 1 in self._outputs.keys():
-                self._outputs[o + 1] = Output(self, int(o + 1), s)
+            output_id = o + 1
+            output = self._outputs.get(output_id)
+            if output is None:
+                self._outputs[output_id] = Output(self, output_id, s)
+            else:
+                output.update_status(s)
 
     def processSystemEvent(self, data):
         et = data[0:2]
@@ -318,7 +542,7 @@ class AlarmPanel:
 
 class Partition:
     def __init__(self, alarmPanel: AlarmPanel, partitionNum: int, status: str):
-        self._alarmPanel = AlarmPanel
+        self._alarmPanel = alarmPanel
         self.partionNum: int = partitionNum
         self.armStatus: str = status
 
@@ -328,20 +552,28 @@ class Partition:
         else:
             return False
 
+    @property
+    def ready(self) -> bool:
+        return self.armStatus != "N"
+
     def proccessStatus(self, status: str):
-        if status not in ["A", "H", "D"]:
+        if status not in ["A", "H", "D", "N"]:
             log.critical("Invalid partition status received {}".format(status))
+            return False
         if status != self.armStatus:
             self.armStatus = status
             # TODO trigger update notification
+            return True
+        return False
 
 
 class Zone:
-    def __init__(self, alarmPanel: AlarmPanel, zoneNum: int, zoneStatus:int= None) -> None:
+    def __init__(self, alarmPanel: AlarmPanel, zoneNum: int, zoneStatus:int=None, latchSeconds:int=0) -> None:
         self._alarmPanel = alarmPanel
         self.zoneNum = zoneNum
         self.bitStatus = ["0","0","0","0"]
         self.callbackList = []
+        self.latchSeconds = latchSeconds
         if zoneStatus:
             self.proccessStatus(zoneStatus)  # binary form of status
 
@@ -362,9 +594,21 @@ class Zone:
     def registerCallback(self, cb):
         self.callbackList.append(cb)
 
+        def _remove_callback() -> None:
+            if cb in self.callbackList:
+                self.callbackList.remove(cb)
+
+        return _remove_callback
+
     @property
     def partionId(self) -> int:
-        return self._alarmPanel._partitionReport[self.zoneNum - 1]
+        if not self._alarmPanel._partitionReport:
+            return 0
+        return int(self._alarmPanel._partitionReport[self.zoneNum - 1])
+
+    @property
+    def partition_id(self) -> int:
+        return self.partionId
 
     @property
     def opened(self) -> bool:
@@ -465,6 +709,9 @@ class Output:
         c = "0Acf{:0>2}00".format(self.outputId)
         self._alarmPanel.sendCommand(c)
         self._status = 0
+
+    def update_status(self, status: int | str) -> None:
+        self._status = int(status)
 
 
 # loop= asyncio.get_event_loop()

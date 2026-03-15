@@ -1,0 +1,28 @@
+default_config:
+
+logger:
+  default: warning
+  logs:
+    custom_components.ademco: debug
+
+ademco:
+  device: /dev/ttyUSB_NOT_PRESENT
+  baud: "1200"
+  doors:
+    - id: "17"
+      name: Front
+    - id: "18"
+      name: Mudroom
+  windows:
+    - id: "28"
+      name: Kitchen
+  motions:
+    - id: "3"
+      name: Garage
+  problems:
+    - id: "29"
+      name: Sump Pump
+  garagedoors:
+    - id: "25"
+      name: West
+      output: "1"

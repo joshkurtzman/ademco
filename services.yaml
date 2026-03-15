@@ -1,0 +1,28 @@
+ademco_bypass:
+  name: Bypass zone
+  description: Send the Ademco keypad bypass sequence for a configured Ademco zone.
+  target:
+    entity:
+      integration: ademco
+  fields:
+    code:
+      name: User code
+      description: Four-digit alarm code entered at call time. The configured partition user number is supplied separately by the integration.
+      required: true
+      example: "1234"
+      selector:
+        text:
+ademco_unbypass:
+  name: Unbypass zone
+  description: Clear a bypassed Ademco zone using the same keypad toggle sequence.
+  target:
+    entity:
+      integration: ademco
+  fields:
+    code:
+      name: User code
+      description: Four-digit alarm code entered at call time. The configured partition user number is supplied separately by the integration.
+      required: true
+      example: "1234"
+      selector:
+        text:
