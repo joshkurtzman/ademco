@@ -148,8 +148,10 @@ class AdemcoGarageDoor(AdemcoEntity, CoverEntity):
 
     async def toggleRelay(self):
         self._output.turnOn()
-        await asyncio.sleep(1.5)
-        self._output.turnOff()
+        try:
+            await asyncio.sleep(1.5)
+        finally:
+            self._output.turnOff()
 
     async def async_open_cover(self, **kwargs):
         if not self._panel.available:

@@ -53,7 +53,10 @@ class AlarmPanel:
         self._partitionReport = None
         self.reader: StreamReader | None = None
         self.writer: StreamWriter | None = None
-        self.writeQueue: asyncio.Queue[bytes] = asyncio.Queue()
+        self.writeQueue: asyncio.PriorityQueue[tuple[int, int, bytes]] = (
+            asyncio.PriorityQueue()
+        )
+        self._command_sequence = 0
         self.is_initialized = False
         self.connected = False
         self._callbacks: list[Callable[[], None]] = []
@@ -117,7 +120,7 @@ class AlarmPanel:
             return
 
         self._stopped = False
-        self.writeQueue = asyncio.Queue()
+        self.writeQueue = asyncio.PriorityQueue()
         self._main_task = self._create_background_task(self.main(), "main")
 
     async def async_stop(self) -> None:
@@ -145,7 +148,7 @@ class AlarmPanel:
                     await wait_closed()
         self.reader = None
         self.writer = None
-        self.writeQueue = asyncio.Queue()
+        self.writeQueue = asyncio.PriorityQueue()
         if self._main_task is not current_task:
             self._main_task = None
         if self._listen_task is not current_task:
@@ -290,21 +293,25 @@ class AlarmPanel:
             else:
                 await asyncio.sleep(1)
 
-    def sendCommand(self, command: str):
+    def sendCommand(self, command: str, *, priority: bool = False):
         if self._stopped or self.writer is None:
             log.debug("Dropping Ademco command while disconnected: %s", command)
             return
 
         message = bytes(command + checksum(command), "utf-8") + b"\r\n"
-        self.writeQueue.put_nowait(message)
+        queue_priority = 0 if priority else 1
+        self._command_sequence += 1
+        self.writeQueue.put_nowait(
+            (queue_priority, self._command_sequence, message)
+        )
 
     async def monitorWriteQueue(self):
         while not self._stopped:
             if self.writer:
                 try:
-                    i = await self.writeQueue.get()
-                    log.debug("Sending Message: {}".format(i))
-                    self.writer.write(i)
+                    _, _, message = await self.writeQueue.get()
+                    log.debug("Sending Message: {}".format(message))
+                    self.writer.write(message)
                     await self.writer.drain()
                     await asyncio.sleep(1)
                 except CancelledError:
@@ -702,12 +709,12 @@ class Output:
 
     def turnOn(self):
         c = "0Acn{:0>2}00".format(self.outputId)
-        self._alarmPanel.sendCommand(c)
+        self._alarmPanel.sendCommand(c, priority=True)
         self._status = 1
 
     def turnOff(self):
         c = "0Acf{:0>2}00".format(self.outputId)
-        self._alarmPanel.sendCommand(c)
+        self._alarmPanel.sendCommand(c, priority=True)
         self._status = 0
 
     def update_status(self, status: int | str) -> None:
